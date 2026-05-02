@@ -36,3 +36,11 @@ jobs:
       - name: Build binaries
         run: cargo build --bins
 
+      - name: Python script syntax
+        run: python -m py_compile scripts/eval_retrieval.py scripts/bench_cli.py
+
+      - name: Retrieval eval
+        run: python scripts/eval_retrieval.py --top-k 3
+
+      - name: CLI benchmark smoke
+        run: python scripts/bench_cli.py --iterations 1 --warmup 0

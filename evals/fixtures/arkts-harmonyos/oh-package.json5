@@ -1,0 +1,6 @@
+{
+  "name": "cpl-arkts-fixture",
+  "version": "0.1.0",
+  "description": "Small ArkTS/HarmonyOS fixture for CPL retrieval evals",
+  "main": "index.ets"
+}

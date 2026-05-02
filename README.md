@@ -40,6 +40,7 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Context budget manager and text transparency panel.
 - CLI `cpl`, MCP stdio server `cpl-mcp`, Python MCP wrapper, and local HTTP API.
 - File watcher and background refresh worker.
+- Fixture-based retrieval evals and CLI latency benchmarks.
 - Optional ArkTS/HarmonyOS profile; see [`docs/PROFILES.md`](docs/PROFILES.md).
 
 ## Install from source
@@ -233,7 +234,13 @@ src/
   background.rs      background refresh worker
 scripts/
   cpl_opencode_mcp.py Python MCP wrapper
+  eval_retrieval.py    fixture retrieval eval runner
+  bench_cli.py         CLI latency benchmark runner
+evals/
+  retrieval.json       retrieval eval cases
+  fixtures/            small Rust, TypeScript, and ArkTS projects
 docs/
+  EVALS.md
   PROFILES.md
   OPENCODE.md
   SPEC.md
@@ -248,6 +255,15 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo build --bins
 ```
+
+Retrieval evals and CLI benchmarks:
+
+```powershell
+python scripts/eval_retrieval.py --cpl .\target\debug\cpl.exe --top-k 3
+python scripts/bench_cli.py --cpl .\target\debug\cpl.exe --iterations 3
+```
+
+Details: [`docs/EVALS.md`](docs/EVALS.md).
 
 Do not commit local project cognition state:
 

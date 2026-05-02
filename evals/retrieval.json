@@ -1,0 +1,50 @@
+[
+  {
+    "id": "rust_validate_token",
+    "root": "evals/fixtures/small-rust",
+    "query": "Where is validate_token token validation implemented?",
+    "expected_files": ["src/auth.rs"],
+    "expected_symbols": ["validate_token"],
+    "min_confidence": 0.05
+  },
+  {
+    "id": "rust_create_session",
+    "root": "evals/fixtures/small-rust",
+    "query": "Where is create_session used to create authenticated sessions?",
+    "expected_files": ["src/session.rs"],
+    "expected_symbols": ["create_session"],
+    "min_confidence": 0.05
+  },
+  {
+    "id": "ts_validate_token",
+    "root": "evals/fixtures/small-ts",
+    "query": "Where is validateToken bearer token validation implemented?",
+    "expected_files": ["src/auth.ts"],
+    "expected_symbols": ["validateToken"],
+    "min_confidence": 0.05
+  },
+  {
+    "id": "ts_login_route",
+    "root": "evals/fixtures/small-ts",
+    "query": "Where are loginHandler and registerLoginRoute defined?",
+    "expected_files": ["src/routes.ts"],
+    "expected_symbols": ["loginHandler", "registerLoginRoute"],
+    "min_confidence": 0.05
+  },
+  {
+    "id": "arkts_entry_ability",
+    "root": "evals/fixtures/arkts-harmonyos",
+    "query": "Where is EntryAbility lifecycle bootstrap implemented?",
+    "expected_files": ["entry/src/main/ets/entryability/EntryAbility.ets"],
+    "expected_symbols": ["EntryAbility"],
+    "min_confidence": 0.05
+  },
+  {
+    "id": "arkts_main_page",
+    "root": "evals/fixtures/arkts-harmonyos",
+    "query": "Where is the MainPage ArkTS component defined?",
+    "expected_files": ["entry/src/main/ets/pages/Index.ets"],
+    "expected_symbols": ["MainPage"],
+    "min_confidence": 0.05
+  }
+]
