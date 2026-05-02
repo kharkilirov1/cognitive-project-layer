@@ -1,0 +1,99 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+  push:
+    branches: [main, master]
+    paths:
+      - ".github/workflows/benchmarks.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - "scripts/eval_retrieval.py"
+      - "scripts/bench_cli.py"
+      - "evals/**"
+
+jobs:
+  cli-benchmarks:
+    name: CLI evals and benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --bins
+
+      - name: Run retrieval eval
+        run: >
+          python scripts/eval_retrieval.py
+          --cpl ./target/release/cpl
+          --top-k 3
+          --json-out .cpl/eval-results/retrieval.json
+
+      - name: Run CLI benchmark
+        run: >
+          python scripts/bench_cli.py
+          --cpl ./target/release/cpl
+          --iterations 5
+          --warmup 1
+          --json-out .cpl/eval-results/bench.json
+
+      - name: Write run summary
+        if: always()
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          eval_path = Path(".cpl/eval-results/retrieval.json")
+          bench_path = Path(".cpl/eval-results/bench.json")
+
+          with summary_path.open("a", encoding="utf-8") as out:
+              out.write("# CPL evals and benchmarks\n\n")
+
+              if eval_path.exists():
+                  data = json.loads(eval_path.read_text(encoding="utf-8"))
+                  s = data["summary"]
+                  out.write("## Retrieval eval\n\n")
+                  out.write(
+                      f"- Passed: `{s['passed']}/{s['total']}`\n"
+                      f"- File hits: `{s['file_hits']}/{s['total']}`\n"
+                      f"- Symbol hits: `{s['symbol_hits']}/{s['total']}`\n"
+                      f"- Avg confidence: `{s['avg_confidence']:.3f}`\n\n"
+                  )
+              else:
+                  out.write("## Retrieval eval\n\nNo retrieval result artifact was produced.\n\n")
+
+              if bench_path.exists():
+                  data = json.loads(bench_path.read_text(encoding="utf-8"))
+                  out.write("## CLI benchmark\n\n")
+                  out.write("| operation | target | p50 ms | p95 ms |\n")
+                  out.write("| --- | --- | ---: | ---: |\n")
+                  for record in data["records"]:
+                      out.write(
+                          f"| {record['operation']} | {record['target']} | "
+                          f"{record['p50_ms']:.1f} | {record['p95_ms']:.1f} |\n"
+                      )
+                  out.write("\n")
+              else:
+                  out.write("## CLI benchmark\n\nNo benchmark artifact was produced.\n")
+
+      - name: Upload eval and benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpl-eval-benchmark-results
+          path: .cpl/eval-results/*.json
+          if-no-files-found: warn

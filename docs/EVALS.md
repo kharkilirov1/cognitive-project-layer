@@ -46,3 +46,16 @@ python scripts/bench_cli.py --json-out .cpl\eval-results\bench.json
 
 These scripts are intentionally stdlib-only so they can run in CI or local
 developer environments without installing Python packages.
+
+## GitHub Actions
+
+Regular CI runs a smoke benchmark with one measured iteration to catch broken
+commands quickly.
+
+The dedicated `Benchmarks` workflow runs release binaries, writes a GitHub
+Actions summary, and uploads JSON artifacts:
+
+- manual: `workflow_dispatch`;
+- scheduled: weekly on Monday;
+- automatic: pushes to `main` that touch CPL source, evals, benchmark scripts,
+  Cargo files, or the benchmark workflow itself.
