@@ -48,6 +48,14 @@ jobs:
           --warmup 1
           --json-out .cpl/eval-results/bench.json
 
+      - name: Run MCP benchmark
+        run: >
+          python scripts/bench_mcp.py
+          --mcp ./target/release/cpl-mcp
+          --iterations 5
+          --warmup 1
+          --json-out .cpl/eval-results/mcp-bench.json
+
       - name: Write run summary
         if: always()
         shell: python
@@ -59,6 +67,7 @@ jobs:
           summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
           eval_path = Path(".cpl/eval-results/retrieval.json")
           bench_path = Path(".cpl/eval-results/bench.json")
+          mcp_bench_path = Path(".cpl/eval-results/mcp-bench.json")
 
           with summary_path.open("a", encoding="utf-8") as out:
               out.write("# CPL evals and benchmarks\n\n")
@@ -89,6 +98,20 @@ jobs:
                   out.write("\n")
               else:
                   out.write("## CLI benchmark\n\nNo benchmark artifact was produced.\n")
+
+              if mcp_bench_path.exists():
+                  data = json.loads(mcp_bench_path.read_text(encoding="utf-8"))
+                  out.write("## MCP benchmark\n\n")
+                  out.write("| operation | target | p50 ms | p95 ms |\n")
+                  out.write("| --- | --- | ---: | ---: |\n")
+                  for record in data["records"]:
+                      out.write(
+                          f"| {record['operation']} | {record['target']} | "
+                          f"{record['p50_ms']:.1f} | {record['p95_ms']:.1f} |\n"
+                      )
+                  out.write("\n")
+              else:
+                  out.write("## MCP benchmark\n\nNo MCP benchmark artifact was produced.\n")
 
       - name: Upload eval and benchmark artifacts
         if: always()

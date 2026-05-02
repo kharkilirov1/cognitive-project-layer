@@ -24,6 +24,7 @@ pub const IGNORED_DIRS: &[&str] = &[
     ".gradle",
     ".idea",
     ".vscode",
+    ".playwright-mcp",
     "coverage",
     ".env",
     ".env.local",
@@ -471,6 +472,7 @@ mod tests {
     #[test]
     fn ignores_cpl_cache_and_nested_build_paths() {
         assert!(should_ignore_path(Path::new(".cpl/vector_db.json")));
+        assert!(should_ignore_path(Path::new(".playwright-mcp/page.yml")));
         assert!(should_ignore_path(Path::new("entry/build/output.js")));
         assert!(!should_ignore_path(Path::new("src/build_tool.rs")));
     }

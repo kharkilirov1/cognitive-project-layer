@@ -236,6 +236,7 @@ scripts/
   cpl_opencode_mcp.py Python MCP wrapper
   eval_retrieval.py    fixture retrieval eval runner
   bench_cli.py         CLI latency benchmark runner
+  bench_mcp.py         MCP stdio warm benchmark runner
 evals/
   retrieval.json       retrieval eval cases
   fixtures/            small Rust, TypeScript, and ArkTS projects
@@ -261,6 +262,7 @@ Retrieval evals and CLI benchmarks:
 ```powershell
 python scripts/eval_retrieval.py --cpl .\target\debug\cpl.exe --top-k 3
 python scripts/bench_cli.py --cpl .\target\debug\cpl.exe --iterations 3
+python scripts/bench_mcp.py --mcp .\target\debug\cpl-mcp.exe --iterations 3
 ```
 
 Details: [`docs/EVALS.md`](docs/EVALS.md).

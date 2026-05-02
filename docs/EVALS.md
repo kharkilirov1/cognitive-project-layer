@@ -44,6 +44,24 @@ Optional JSON output:
 python scripts/bench_cli.py --json-out .cpl\eval-results\bench.json
 ```
 
+## MCP benchmark
+
+The MCP benchmark measures the agent-facing warm path: one long-lived
+`cpl-mcp` stdio process per root, with repeated `tools/call` requests against
+the same in-memory `CognitiveProjectLayer`.
+
+```powershell
+cargo build --release --bins
+python scripts/bench_mcp.py --mcp .\target\release\cpl-mcp.exe --iterations 5 --warmup 1
+```
+
+The output separates:
+
+- `initialize`: MCP JSON-RPC handshake;
+- `tools/list`: MCP tool discovery;
+- `layer_init`: first `cpl_skeleton` call that builds the in-memory layer;
+- `cpl_scan`, `cpl_skeleton`, `cpl_retrieve`: warm repeated MCP tool calls.
+
 These scripts are intentionally stdlib-only so they can run in CI or local
 developer environments without installing Python packages.
 
