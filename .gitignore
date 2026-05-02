@@ -8,3 +8,4 @@
 opencode.json
 __pycache__/
 *.pyc
+.playwright-mcp/
