@@ -1,5 +1,9 @@
 # Cognitive Project Layer
 
+[![CI](https://github.com/kharkilirov1/cognitive-project-layer/actions/workflows/ci.yml/badge.svg)](https://github.com/kharkilirov1/cognitive-project-layer/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
+
 Local-first context engine for coding agents.
 
 Cognitive Project Layer (CPL) gives an agent a structured, inspectable view of a
@@ -46,9 +50,15 @@ Requirements:
 - Optional: Ollama if you want local neural embeddings.
 
 ```powershell
-git clone https://github.com/<owner>/cognitive-project-layer.git
+git clone https://github.com/kharkilirov1/cognitive-project-layer.git
 cd cognitive-project-layer
 cargo build --bins
+```
+
+Install directly with Cargo:
+
+```powershell
+cargo install --git https://github.com/kharkilirov1/cognitive-project-layer.git
 ```
 
 The binaries are:
@@ -65,6 +75,14 @@ cargo run -- symbols --root . retrieve
 cargo run -- retrieve --root . "Where is retrieve implemented?"
 cargo run -- context --root . "Why does the build fail around hilog?"
 cargo run -- panel --root . "architecture retrieval"
+```
+
+After `cargo install --git`, use the installed binary:
+
+```powershell
+cpl scan --root .
+cpl retrieve --root . "Where is retrieve implemented?"
+cpl init --root . --server native
 ```
 
 Build local embeddings:
