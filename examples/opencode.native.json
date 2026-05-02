@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "cpl": {
+      "type": "local",
+      "command": [
+        "cpl-mcp",
+        "--root",
+        "."
+      ],
+      "enabled": true,
+      "timeout": 300000,
+      "environment": {
+        "CPL_EMBEDDING_BACKEND": "ollama",
+        "CPL_EMBEDDING_MODEL": "nomic-embed-text",
+        "CPL_EMBEDDING_DIMENSIONS": "768"
+      }
+    }
+  }
+}
+
