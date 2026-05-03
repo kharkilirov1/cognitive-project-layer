@@ -8,14 +8,16 @@ use std::thread;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use crate::CognitiveProjectLayer;
 use crate::budget::ContextBudgetManager;
 use crate::doctor;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
-use crate::persistent_index::PersistentIndex;
+use crate::persistent_index::{PersistentIndex, PersistentIndexRefreshMode};
 use crate::persistent_vector::{PersistentVectorDb, build_and_save_default};
 use crate::scanner::ProjectScanner;
 use crate::tools::FallbackTools;
+use crate::{
+    CognitiveProjectLayer, DEFAULT_INDEX_REFRESH_LIMIT, refresh_or_rebuild_persistent_index,
+};
 
 pub fn serve_project(root: impl AsRef<Path>, addr: &str) -> Result<()> {
     serve_project_with_budget(root, addr, ContextBudgetManager::default().max_tokens)
@@ -109,6 +111,7 @@ fn route_request(
                 "/embeddings/rebuild",
                 "/index-db",
                 "/index/freshness",
+                "/index/refresh",
                 "/index/rebuild",
                 "/doctor",
                 "/tree?depth=3",
@@ -245,6 +248,21 @@ fn route_request(
             let text = freshness.render_human();
             Ok(json!({ "freshness": freshness, "text": text }))
         }
+        ("POST", "/index/refresh") => {
+            let max_incremental_files = input_usize(&request, "max_incremental_files")
+                .unwrap_or(DEFAULT_INDEX_REFRESH_LIMIT);
+            let max_tokens = layer_max_tokens(layer)?;
+            let result =
+                refresh_or_rebuild_persistent_index(root, max_tokens, max_incremental_files)?;
+            if result.mode != PersistentIndexRefreshMode::Unchanged {
+                with_layer(layer, |layer| {
+                    *layer = CognitiveProjectLayer::initialize_with_budget(root, max_tokens)?;
+                    Ok(json!({}))
+                })?;
+            }
+            let text = result.render_human();
+            Ok(json!({ "result": result, "text": text }))
+        }
         ("GET", "/doctor") => {
             let report = doctor::run(root)?;
             let text = report.render_human();
@@ -286,6 +304,13 @@ fn with_layer(
         .lock()
         .map_err(|_| anyhow::anyhow!("project layer lock is poisoned"))?;
     action(&mut layer)
+}
+
+fn layer_max_tokens(layer: &Arc<Mutex<CognitiveProjectLayer>>) -> Result<usize> {
+    let layer = layer
+        .lock()
+        .map_err(|_| anyhow::anyhow!("project layer lock is poisoned"))?;
+    Ok(layer.budget.max_tokens)
 }
 
 fn read_request(stream: &TcpStream) -> Result<HttpRequest> {

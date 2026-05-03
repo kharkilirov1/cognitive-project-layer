@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -7,10 +8,13 @@ use serde_json::{Value, json};
 use crate::budget::ContextBudgetManager;
 use crate::doctor;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
-use crate::persistent_index::PersistentIndex;
+use crate::persistent_index::{PersistentIndex, PersistentIndexRefreshMode};
 use crate::persistent_vector::build_and_save_default;
 use crate::tools::FallbackTools;
-use crate::{CognitiveProjectLayer, scanner::ProjectScanner};
+use crate::{
+    CognitiveProjectLayer, DEFAULT_INDEX_REFRESH_LIMIT, refresh_or_rebuild_persistent_index,
+    scanner::ProjectScanner,
+};
 
 pub fn run_stdio(root: impl AsRef<Path>) -> Result<()> {
     run_stdio_with_budget(root, ContextBudgetManager::default().max_tokens)
@@ -23,6 +27,7 @@ pub fn run_stdio_with_budget(root: impl AsRef<Path>, max_tokens: usize) -> Resul
         root,
         layer: None,
         max_tokens,
+        last_index_auto_refresh: None,
     };
     server.run()
 }
@@ -31,6 +36,7 @@ struct McpServer {
     root: PathBuf,
     layer: Option<CognitiveProjectLayer>,
     max_tokens: usize,
+    last_index_auto_refresh: Option<Instant>,
 }
 
 impl McpServer {
@@ -279,6 +285,17 @@ impl McpServer {
                 let freshness = PersistentIndex::freshness_default(&self.root, &scan)?;
                 Ok(freshness.render_human())
             }
+            "cpl_index_refresh" => {
+                let max_incremental_files = optional_usize(&args, "max_incremental_files")
+                    .unwrap_or_else(index_refresh_limit_from_env);
+                let result = refresh_or_rebuild_persistent_index(
+                    &self.root,
+                    self.max_tokens,
+                    max_incremental_files,
+                )?;
+                self.layer = None;
+                Ok(result.render_human())
+            }
             "cpl_doctor" => Ok(doctor::run(&self.root)?.render_human()),
             "cpl_tree" => {
                 let depth = args
@@ -310,6 +327,27 @@ impl McpServer {
     }
 
     fn layer_mut(&mut self) -> Result<&mut CognitiveProjectLayer> {
+        if self.should_auto_refresh_index() {
+            match refresh_or_rebuild_persistent_index(
+                &self.root,
+                self.max_tokens,
+                index_refresh_limit_from_env(),
+            ) {
+                Ok(result) => {
+                    trace(&format!(
+                        "index auto-refresh mode={:?} touched={}",
+                        result.mode, result.touched_files
+                    ));
+                    if result.mode != PersistentIndexRefreshMode::Unchanged {
+                        self.layer = None;
+                    }
+                }
+                Err(error) => {
+                    trace(&format!("index auto-refresh skipped: {error}"));
+                }
+            }
+            self.last_index_auto_refresh = Some(Instant::now());
+        }
         if self.layer.is_none() {
             self.layer = Some(CognitiveProjectLayer::initialize_with_budget(
                 &self.root,
@@ -317,6 +355,18 @@ impl McpServer {
             )?);
         }
         Ok(self.layer.as_mut().expect("layer initialized"))
+    }
+
+    fn should_auto_refresh_index(&self) -> bool {
+        if !index_auto_refresh_enabled() {
+            return false;
+        }
+        if self.layer.is_none() {
+            return true;
+        }
+        self.last_index_auto_refresh
+            .map(|last| last.elapsed() >= index_auto_refresh_interval())
+            .unwrap_or(true)
     }
 }
 
@@ -396,6 +446,13 @@ fn tool_definitions() -> Vec<Value> {
             "cpl_index_freshness",
             "Check whether the persistent SQLite index is fresh for current project files.",
             json!({}),
+        ),
+        tool(
+            "cpl_index_refresh",
+            "Refresh the persistent SQLite index incrementally, rebuilding only when needed.",
+            json!({
+                "max_incremental_files": {"type": "integer", "minimum": 0}
+            }),
         ),
         tool(
             "cpl_doctor",
@@ -546,6 +603,30 @@ fn optional_usize(args: &Value, name: &str) -> Option<usize> {
         .map(|value| value as usize)
 }
 
+fn index_refresh_limit_from_env() -> usize {
+    std::env::var("CPL_INDEX_REFRESH_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_INDEX_REFRESH_LIMIT)
+}
+
+fn index_auto_refresh_enabled() -> bool {
+    std::env::var("CPL_INDEX_AUTO_REFRESH")
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "off" || value == "no")
+        })
+        .unwrap_or(true)
+}
+
+fn index_auto_refresh_interval() -> Duration {
+    let millis = std::env::var("CPL_INDEX_AUTO_REFRESH_INTERVAL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(2_000);
+    Duration::from_millis(millis)
+}
+
 fn embedding_config(
     backend: &str,
     model: Option<String>,
@@ -595,6 +676,7 @@ mod tests {
     fn tool_definitions_have_input_schemas() {
         let tools = tool_definitions();
         assert!(tools.iter().any(|tool| tool["name"] == "cpl_retrieve"));
+        assert!(tools.iter().any(|tool| tool["name"] == "cpl_index_refresh"));
         assert!(tools.iter().all(|tool| tool.get("inputSchema").is_some()));
         let context = tools
             .iter()

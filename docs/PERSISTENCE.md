@@ -20,6 +20,13 @@ Build it:
 cpl index-build --root .
 ```
 
+Refresh it after source/config changes:
+
+```bash
+cpl index-refresh --root .
+cpl index-refresh --root . --max-incremental-files 256
+```
+
 Inspect it:
 
 ```bash
@@ -34,12 +41,14 @@ MCP tools:
 cpl_index_build
 cpl_index_db
 cpl_index_freshness
+cpl_index_refresh
 ```
 
 HTTP endpoints:
 
 ```text
 POST /index/rebuild
+POST /index/refresh
 GET  /index-db
 GET  /index/freshness
 ```
@@ -48,6 +57,15 @@ When the index is fresh, `CognitiveProjectLayer::initialize()` can warm-start
 symbols, references, graph, and chunks from SQLite. If any indexed file is
 changed, missing, extra, or on an unsupported schema, CPL falls back to the full
 scanner/parser path instead of using stale context.
+
+`index-refresh` tries a bounded changed-file refresh first. If the SQLite index
+is missing, incompatible, corrupt, or too many files changed, CPL rebuilds the
+structural index from the full project layer. The MCP stdio server runs this
+same refresh path automatically before serving layer-backed tools unless
+`CPL_INDEX_AUTO_REFRESH=0` is set. Tune the incremental cutoff with
+`CPL_INDEX_REFRESH_LIMIT` or the `max_incremental_files` tool argument. The
+MCP auto-refresh path is throttled by `CPL_INDEX_AUTO_REFRESH_INTERVAL_MS`
+(default: `2000`) so warm repeated tool calls stay fast.
 
 ## Embedding vector DB: `.cpl/vector_db.json`
 

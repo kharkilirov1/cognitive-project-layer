@@ -38,7 +38,10 @@ If `cpl-mcp` is on `PATH`, a portable config looks like this:
       "environment": {
         "CPL_EMBEDDING_BACKEND": "ollama",
         "CPL_EMBEDDING_MODEL": "nomic-embed-text",
-        "CPL_EMBEDDING_DIMENSIONS": "768"
+        "CPL_EMBEDDING_DIMENSIONS": "768",
+        "CPL_INDEX_AUTO_REFRESH": "1",
+        "CPL_INDEX_REFRESH_LIMIT": "128",
+        "CPL_INDEX_AUTO_REFRESH_INTERVAL_MS": "2000"
       }
     }
   }
@@ -58,6 +61,10 @@ Example files:
 - `cpl_context` — managed LLM context with token budget.
 - `cpl_symbols` — exact/fuzzy symbol lookup.
 - `cpl_references` — symbol usages/references.
+- `cpl_index_build` — build `.cpl/index.sqlite`.
+- `cpl_index_db` — inspect SQLite index summary.
+- `cpl_index_freshness` — check whether SQLite index matches current files.
+- `cpl_index_refresh` — incrementally refresh SQLite index or rebuild when needed.
 - `cpl_embed_search` — search persistent local neural embedding DB.
 - `cpl_build_embeddings` — rebuild persistent embeddings DB; defaults to Ollama `nomic-embed-text`.
 - `cpl_tree` — ignored-aware project file tree.

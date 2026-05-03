@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -97,6 +97,29 @@ def measure(base: list[str] | None, args: list[str], cwd: Path, iterations: int,
     return durations
 
 
+def measure_with_hook(
+    base: list[str] | None,
+    args: list[str],
+    cwd: Path,
+    iterations: int,
+    warmup: int,
+    before_each: Callable[[int], None],
+) -> list[float]:
+    tick = 0
+    for _ in range(warmup):
+        before_each(tick)
+        tick += 1
+        run_command(base, args, cwd)
+    durations = []
+    for _ in range(iterations):
+        before_each(tick)
+        tick += 1
+        started = time.perf_counter()
+        run_command(base, args, cwd)
+        durations.append((time.perf_counter() - started) * 1000.0)
+    return durations
+
+
 def percentile(values: list[float], p: float) -> float:
     if not values:
         return 0.0
@@ -137,6 +160,12 @@ def generate_repo(root: Path, files: int, symbols_per_file: int) -> None:
     (root / "src" / "lib.rs").write_text("pub mod modules;\n", encoding="utf-8")
 
 
+def mutate_one_source_file(root: Path, tick: int) -> None:
+    path = root / "src" / "modules" / "module_00000.rs"
+    text = path.read_text(encoding="utf-8").split("// refresh marker", 1)[0].rstrip()
+    path.write_text(f"{text}\n// refresh marker {tick}\n", encoding="utf-8")
+
+
 def record(operation: str, durations: list[float], extra: dict[str, Any] | None = None) -> dict[str, Any]:
     item = {
         "operation": operation,
@@ -174,6 +203,15 @@ def main() -> int:
         records.append(record("cold_skeleton_no_index", measure(base, ["--root", str(root), "skeleton", "--json"], REPO_ROOT, args.iterations, args.warmup)))
         records.append(record("index_build", measure(base, ["--root", str(root), "index-build", "--json"], REPO_ROOT, args.iterations, 0)))
         records.append(record("index_freshness", measure(base, ["--root", str(root), "index-freshness", "--json"], REPO_ROOT, args.iterations, args.warmup)))
+        records.append(record("index_refresh_unchanged", measure(base, ["--root", str(root), "index-refresh", "--json"], REPO_ROOT, args.iterations, args.warmup)))
+        records.append(record("index_refresh_one_file", measure_with_hook(
+            base,
+            ["--root", str(root), "index-refresh", "--json"],
+            REPO_ROOT,
+            args.iterations,
+            args.warmup,
+            lambda tick: mutate_one_source_file(root, tick),
+        )))
         records.append(record("warm_skeleton_sqlite", measure(base, ["--root", str(root), "skeleton", "--json"], REPO_ROOT, args.iterations, args.warmup)))
         records.append(record("warm_retrieve_sqlite", measure(base, ["--root", str(root), "retrieve", "--json", "feature 42 linked"], REPO_ROOT, args.iterations, args.warmup)))
 

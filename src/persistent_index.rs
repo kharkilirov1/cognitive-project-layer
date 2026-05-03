@@ -85,6 +85,36 @@ pub struct PersistentIndexSnapshot {
     pub chunks: Vec<RichChunk>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PersistentIndexRefreshMode {
+    Unchanged,
+    Incremental,
+    Rebuilt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistentIndexRefreshResult {
+    pub mode: PersistentIndexRefreshMode,
+    pub path: PathBuf,
+    pub touched_files: usize,
+    pub summary: PersistentIndexSummary,
+    pub freshness_before: PersistentIndexFreshness,
+    pub freshness_after: PersistentIndexFreshness,
+}
+
+impl PersistentIndexRefreshResult {
+    pub fn render_human(&self) -> String {
+        format!(
+            "Persistent SQLite index refresh\nMode: {:?}\nTouched files: {}\nBefore: {}\nAfter: {}\n\n{}",
+            self.mode,
+            self.touched_files,
+            self.freshness_before.reason,
+            self.freshness_after.reason,
+            self.summary.render_human()
+        )
+    }
+}
+
 impl PersistentIndexSummary {
     pub fn render_human(&self) -> String {
         format!(
@@ -341,6 +371,80 @@ impl PersistentIndex {
         Self::freshness(&Self::default_path(root), root, scan)
     }
 
+    pub fn refresh_incremental_default(
+        root: &Path,
+        scan: &ProjectScan,
+        max_incremental_files: usize,
+    ) -> Result<Option<PersistentIndexRefreshResult>> {
+        let path = Self::default_path(root);
+        Self::refresh_incremental(&path, root, scan, max_incremental_files)
+    }
+
+    pub fn refresh_incremental(
+        path: &Path,
+        root: &Path,
+        scan: &ProjectScan,
+        max_incremental_files: usize,
+    ) -> Result<Option<PersistentIndexRefreshResult>> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let freshness_before = Self::freshness(path, &root, scan)?;
+        if !freshness_before.exists || freshness_before.schema_version != Some(SCHEMA_VERSION) {
+            return Ok(None);
+        }
+
+        let touched = refresh_touched_paths(&freshness_before);
+        if touched.is_empty() {
+            let summary = Self::summary(path)?;
+            return Ok(Some(PersistentIndexRefreshResult {
+                mode: PersistentIndexRefreshMode::Unchanged,
+                path: path.to_path_buf(),
+                touched_files: 0,
+                summary,
+                freshness_after: freshness_before.clone(),
+                freshness_before,
+            }));
+        }
+        if touched.len() > max_incremental_files {
+            return Ok(None);
+        }
+
+        let mut snapshot = Self::load_snapshot(path, &root)?;
+        for rel in &touched {
+            let abs = root.join(rel);
+            snapshot.symbols.refresh_file(&abs)?;
+            snapshot
+                .references
+                .refresh_file(&root, &abs, &snapshot.symbols)?;
+            snapshot
+                .graph
+                .refresh_file(&root, scan, &snapshot.symbols, &abs)?;
+
+            snapshot.chunks.retain(|chunk| chunk.path != *rel);
+            if abs.exists() {
+                snapshot
+                    .chunks
+                    .extend(crate::chunk::chunk_file(&root, &abs, &snapshot.symbols)?);
+            }
+        }
+        snapshot.chunks.sort_by(|left, right| {
+            left.path
+                .cmp(&right.path)
+                .then_with(|| left.line_start.cmp(&right.line_start))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let summary = write_incremental_snapshot(path, &root, scan, &snapshot, &touched)?;
+        let freshness_after = Self::freshness(path, &root, scan)?;
+        Ok(Some(PersistentIndexRefreshResult {
+            mode: PersistentIndexRefreshMode::Incremental,
+            path: path.to_path_buf(),
+            touched_files: touched.len(),
+            summary,
+            freshness_before,
+            freshness_after,
+        }))
+    }
+
     pub fn freshness(
         path: &Path,
         root: &Path,
@@ -564,6 +668,227 @@ fn create_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON chunks(file_path);
         CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_id);
         CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_id);",
+    )?;
+    Ok(())
+}
+
+fn write_incremental_snapshot(
+    path: &Path,
+    root: &Path,
+    scan: &ProjectScan,
+    snapshot: &PersistentIndexSnapshot,
+    touched: &BTreeSet<PathBuf>,
+) -> Result<PersistentIndexSummary> {
+    let mut conn = Connection::open(path)
+        .with_context(|| format!("failed to open SQLite index {}", path.display()))?;
+    create_schema(&conn)?;
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let source_paths = scan
+        .source_paths
+        .iter()
+        .map(|path| relative_path(&root, path))
+        .collect::<BTreeSet<_>>();
+    let config_paths = scan.config_files.iter().cloned().collect::<BTreeSet<_>>();
+    let entry_paths = scan
+        .entry_candidates
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let built_unix = current_unix()?;
+    let tx = conn.transaction()?;
+
+    for rel in touched {
+        let rel_text = path_text(rel);
+        tx.execute("DELETE FROM files WHERE path = ?1", params![rel_text])?;
+        tx.execute(
+            "DELETE FROM symbols WHERE file_path = ?1",
+            params![path_text(rel)],
+        )?;
+        tx.execute(
+            "DELETE FROM references_idx WHERE file_path = ?1",
+            params![path_text(rel)],
+        )?;
+        tx.execute(
+            "DELETE FROM chunks WHERE file_path = ?1",
+            params![path_text(rel)],
+        )?;
+    }
+
+    for rel in touched {
+        let abs = root.join(rel);
+        if abs.is_file() {
+            insert_file_row(&tx, &root, rel, &source_paths, &config_paths, &entry_paths)?;
+        }
+    }
+
+    for symbol in &snapshot.symbols.symbols {
+        let rel = relative_path(&root, &symbol.path);
+        if touched.contains(&rel) {
+            insert_symbol_row(&tx, &root, symbol)?;
+        }
+    }
+
+    for reference in snapshot.references.by_symbol.values().flatten() {
+        if touched.contains(&reference.path) {
+            insert_reference_row(&tx, &root, reference)?;
+        }
+    }
+
+    for chunk in &snapshot.chunks {
+        if touched.contains(&chunk.path) {
+            insert_chunk_row(&tx, chunk)?;
+        }
+    }
+
+    tx.execute_batch("DELETE FROM graph_nodes; DELETE FROM graph_edges;")?;
+    for node in &snapshot.graph.nodes {
+        insert_graph_node_row(&tx, node)?;
+    }
+    for edge in &snapshot.graph.edges {
+        insert_graph_edge_row(&tx, edge)?;
+    }
+
+    write_meta(&tx, "schema_version", SCHEMA_VERSION.to_string())?;
+    write_meta(&tx, "root", root.to_string_lossy())?;
+    write_meta(&tx, "built_unix", built_unix.to_string())?;
+    write_meta(&tx, "package_version", env!("CARGO_PKG_VERSION"))?;
+
+    let summary = PersistentIndexSummary {
+        path: path.to_path_buf(),
+        schema_version: SCHEMA_VERSION,
+        root: root.clone(),
+        built_unix,
+        files: count_table(&tx, "files")?,
+        symbols: count_table(&tx, "symbols")?,
+        references: count_table(&tx, "references_idx")?,
+        chunks: count_table(&tx, "chunks")?,
+        graph_nodes: count_table(&tx, "graph_nodes")?,
+        graph_edges: count_table(&tx, "graph_edges")?,
+    };
+    write_summary_meta(&tx, &summary)?;
+    tx.commit()?;
+    Ok(summary)
+}
+
+fn insert_file_row(
+    conn: &Connection,
+    root: &Path,
+    rel: &Path,
+    source_paths: &BTreeSet<PathBuf>,
+    config_paths: &BTreeSet<PathBuf>,
+    entry_paths: &BTreeSet<PathBuf>,
+) -> Result<()> {
+    let abs = root.join(rel);
+    let metadata =
+        fs::metadata(&abs).with_context(|| format!("failed to stat {}", abs.display()))?;
+    let sha256 = sha256_file(&abs).with_context(|| format!("failed to hash {}", abs.display()))?;
+    let is_config = config_paths.contains(rel) || is_config_file(&abs);
+    let is_entry = entry_paths.contains(rel) || is_entry_candidate(&abs, rel);
+    conn.execute(
+        "INSERT OR REPLACE INTO files \
+        (path, language, size_bytes, modified_unix, sha256, is_source, is_config, is_entry) \
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            path_text(rel),
+            detect_language(&abs),
+            metadata.len() as i64,
+            modified_unix(&metadata).map(|value| value as i64),
+            sha256,
+            bool_i64(source_paths.contains(rel)),
+            bool_i64(is_config),
+            bool_i64(is_entry),
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_symbol_row(conn: &Connection, root: &Path, symbol: &SymbolLocation) -> Result<()> {
+    let rel = relative_path(root, &symbol.path);
+    conn.execute(
+        "INSERT INTO symbols \
+        (file_path, name, kind, line_start, line_end, signature, visibility) \
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            path_text(&rel),
+            symbol.name,
+            format!("{:?}", symbol.kind),
+            symbol.line_start as i64,
+            symbol.line_end as i64,
+            symbol.signature,
+            format!("{:?}", symbol.visibility),
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_reference_row(
+    conn: &Connection,
+    root: &Path,
+    reference: &ReferenceLocation,
+) -> Result<()> {
+    let rel = relative_path(root, &reference.path);
+    conn.execute(
+        "INSERT INTO references_idx \
+        (file_path, symbol_name, line_number, column_start, kind, snippet) \
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            path_text(&rel),
+            reference.symbol_name,
+            reference.line_number as i64,
+            reference.column_start as i64,
+            format!("{:?}", reference.kind),
+            reference.snippet,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_chunk_row(conn: &Connection, chunk: &RichChunk) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO chunks \
+        (id, file_path, line_start, line_end, chunk_type, signature, source, docs, \
+         symbols_json, imports_json, module_path_json, text_hash) \
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            chunk.id,
+            path_text(&chunk.path),
+            chunk.line_start as i64,
+            chunk.line_end as i64,
+            format!("{:?}", chunk.chunk_type),
+            chunk.signature,
+            chunk.source,
+            chunk.docs,
+            serde_json::to_string(&chunk.symbols)?,
+            serde_json::to_string(&chunk.imports)?,
+            serde_json::to_string(&chunk.module_path)?,
+            text_hash(&chunk.embed_text()),
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_graph_node_row(conn: &Connection, node: &GraphNode) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO graph_nodes (id, kind, label, path) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            node.id,
+            format!("{:?}", node.kind),
+            node.label,
+            node.path.as_ref().map(|path| path_text(path)),
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_graph_edge_row(conn: &Connection, edge: &GraphEdge) -> Result<()> {
+    conn.execute(
+        "INSERT INTO graph_edges (from_id, to_id, kind, evidence) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            edge.from,
+            edge.to,
+            format!("{:?}", edge.kind),
+            edge.evidence
+        ],
     )?;
     Ok(())
 }
@@ -821,6 +1146,19 @@ fn indexed_file_paths(root: &Path, scan: &ProjectScan) -> BTreeSet<PathBuf> {
     paths
 }
 
+fn refresh_touched_paths(freshness: &PersistentIndexFreshness) -> BTreeSet<PathBuf> {
+    let mut paths = BTreeSet::new();
+    paths.extend(
+        freshness
+            .changed_files
+            .iter()
+            .map(|change| change.path.clone()),
+    );
+    paths.extend(freshness.missing_files.iter().cloned());
+    paths.extend(freshness.extra_files.iter().cloned());
+    paths
+}
+
 fn relative_path(root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).to_path_buf()
 }
@@ -1069,6 +1407,51 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refresh_incremental_updates_changed_file_in_sqlite_index() {
+        let root = temp_project("persistent_index_incremental_refresh");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='tmp'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        let file = root.join("src").join("lib.rs");
+        fs::write(&file, "pub fn old_symbol() -> bool { true }\n").unwrap();
+
+        let layer = CognitiveProjectLayer::initialize(&root).unwrap();
+        PersistentIndex::build_default(
+            &layer.root,
+            &layer.scan,
+            &layer.symbols,
+            &layer.references,
+            &layer.graph,
+            &layer.vector_store.chunks,
+        )
+        .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        fs::write(&file, "pub fn new_symbol() -> bool { true }\n").unwrap();
+        let changed_scan = crate::scanner::ProjectScanner::default()
+            .scan(&root)
+            .unwrap();
+        let result = PersistentIndex::refresh_incremental_default(&root, &changed_scan, 128)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result.mode, PersistentIndexRefreshMode::Incremental);
+        assert_eq!(result.touched_files, 1);
+        assert!(result.freshness_after.fresh, "{}", result.render_human());
+
+        let snapshot = PersistentIndex::load_snapshot_default(&root, &changed_scan)
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.symbols.find("old_symbol").is_empty());
+        assert!(!snapshot.symbols.find("new_symbol").is_empty());
 
         let _ = fs::remove_dir_all(root);
     }

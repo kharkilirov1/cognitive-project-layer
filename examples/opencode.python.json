@@ -14,9 +14,11 @@
       "environment": {
         "CPL_EMBEDDING_BACKEND": "ollama",
         "CPL_EMBEDDING_MODEL": "nomic-embed-text",
-        "CPL_EMBEDDING_DIMENSIONS": "768"
+        "CPL_EMBEDDING_DIMENSIONS": "768",
+        "CPL_INDEX_AUTO_REFRESH": "1",
+        "CPL_INDEX_REFRESH_LIMIT": "128",
+        "CPL_INDEX_AUTO_REFRESH_INTERVAL_MS": "2000"
       }
     }
   }
 }
-

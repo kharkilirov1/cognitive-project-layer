@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## 0.4.0 - 2026-05-03
+
+### Added
+
+- Incremental structural SQLite refresh through `cpl index-refresh`.
+- MCP tool `cpl_index_refresh` and HTTP endpoint `POST /index/refresh`.
+- MCP auto-refresh before layer-backed tools, configurable with
+  `CPL_INDEX_AUTO_REFRESH`, `CPL_INDEX_REFRESH_LIMIT`, and
+  `CPL_INDEX_AUTO_REFRESH_INTERVAL_MS`.
+- Large synthetic benchmark coverage for unchanged and one-file index refresh.
+
+### Changed
+
+- Layer-backed MCP calls reload the in-memory project layer after index refresh
+  updates the SQLite cache.
+
 ## 0.3.0 - 2026-05-03
 
 ### Added

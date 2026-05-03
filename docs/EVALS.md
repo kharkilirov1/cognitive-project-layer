@@ -73,6 +73,8 @@ The large benchmark generates a temporary Rust repository and measures:
 - cold skeleton before a SQLite index exists;
 - `index-build`;
 - `index-freshness`;
+- `index-refresh` when unchanged;
+- `index-refresh` after one source file changed;
 - warm skeleton after `.cpl/index.sqlite` exists;
 - warm retrieval after `.cpl/index.sqlite` exists.
 

@@ -31,7 +31,10 @@ use chunk::{RichChunk, chunk_file};
 use graph::ProjectGraph;
 use indexer::LazyIndexer;
 use memory::WorkingMemory;
-use persistent_index::PersistentIndex;
+use persistent_index::{
+    PersistentIndex, PersistentIndexFreshness, PersistentIndexRefreshMode,
+    PersistentIndexRefreshResult,
+};
 use persistent_vector::PersistentVectorDb;
 use references::ReferenceIndex;
 use retrieval::{HybridRetriever, RetrievalResult, RetrieverResources};
@@ -42,6 +45,8 @@ use symbols::SymbolIndex;
 use tools::{FileCache, validate_path};
 use transparency::TransparencyPanel;
 use vector::VectorStore;
+
+pub const DEFAULT_INDEX_REFRESH_LIMIT: usize = 128;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitiveProjectLayer {
@@ -56,6 +61,65 @@ pub struct CognitiveProjectLayer {
     pub persistent_vector_db: Option<PersistentVectorDb>,
     pub memory: WorkingMemory,
     pub budget: ContextBudgetManager,
+}
+
+pub fn refresh_or_rebuild_persistent_index(
+    root: impl AsRef<Path>,
+    max_tokens: usize,
+    max_incremental_files: usize,
+) -> Result<PersistentIndexRefreshResult> {
+    let root = normalize_root(root.as_ref())?;
+    let scan = ProjectScanner::default().scan(&root)?;
+    let incremental_error =
+        match PersistentIndex::refresh_incremental_default(&root, &scan, max_incremental_files) {
+            Ok(Some(result)) => return Ok(result),
+            Ok(None) => None,
+            Err(error) => Some(error.to_string()),
+        };
+
+    let mut freshness_before = match PersistentIndex::freshness_default(&root, &scan) {
+        Ok(freshness) => freshness,
+        Err(error) => PersistentIndexFreshness {
+            path: PersistentIndex::default_path(&root),
+            exists: PersistentIndex::default_path(&root).exists(),
+            fresh: false,
+            schema_version: None,
+            reason: format!("index freshness check failed: {error}"),
+            current_files: scan.source_paths.len()
+                + scan.config_files.len()
+                + scan.entry_candidates.len(),
+            indexed_files: 0,
+            changed_files: Vec::new(),
+            missing_files: Vec::new(),
+            extra_files: Vec::new(),
+        },
+    };
+    if let Some(error) = incremental_error {
+        freshness_before.reason = format!("incremental refresh failed: {error}");
+    }
+    let layer = CognitiveProjectLayer::initialize_with_budget(&root, max_tokens)?;
+    let (summary, path) = PersistentIndex::build_default(
+        &layer.root,
+        &layer.scan,
+        &layer.symbols,
+        &layer.references,
+        &layer.graph,
+        &layer.vector_store.chunks,
+    )?;
+    let freshness_after = PersistentIndex::freshness_default(&layer.root, &layer.scan)?;
+
+    Ok(PersistentIndexRefreshResult {
+        mode: PersistentIndexRefreshMode::Rebuilt,
+        path,
+        touched_files: freshness_change_count(&freshness_before),
+        summary,
+        freshness_before,
+        freshness_after,
+    })
+}
+
+fn freshness_change_count(freshness: &PersistentIndexFreshness) -> usize {
+    freshness.changed_files.len() + freshness.missing_files.len() + freshness.extra_files.len()
 }
 
 impl CognitiveProjectLayer {

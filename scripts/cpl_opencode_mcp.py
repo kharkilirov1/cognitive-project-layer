@@ -172,6 +172,16 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="cpl_index_refresh",
+            description="Refresh persistent structural SQLite index incrementally.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "max_incremental_files": {"type": "integer", "minimum": 0},
+                },
+            },
+        ),
+        Tool(
             name="cpl_doctor",
             description="Diagnose CPL binaries, MCP config, SQLite index, vector DB, and Ollama.",
             inputSchema={"type": "object", "properties": {}},
@@ -253,6 +263,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None):
             return text(run_cpl(["index-db"]))
         if name == "cpl_index_freshness":
             return text(run_cpl(["index-freshness"]))
+        if name == "cpl_index_refresh":
+            command = ["index-refresh"]
+            if args.get("max_incremental_files") is not None:
+                command.extend(["--max-incremental-files", str(args["max_incremental_files"])])
+            return text(run_cpl(command, timeout=600))
         if name == "cpl_doctor":
             return text(run_cpl(["doctor"], timeout=180))
         if name == "cpl_panel":
@@ -277,7 +292,7 @@ async def main() -> None:
             write_stream,
             InitializationOptions(
                 server_name="cognitive-project-layer",
-                server_version="0.1.0",
+                server_version="0.4.0",
                 capabilities=app.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},

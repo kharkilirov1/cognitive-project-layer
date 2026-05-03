@@ -31,7 +31,8 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Local TF-IDF vector search with no network dependency.
 - Persistent structural SQLite index in `.cpl/index.sqlite`.
 - Warm-start from fresh SQLite structural indexes.
-- Index freshness diagnostics and `cpl doctor`.
+- Incremental SQLite index refresh with rebuild fallback.
+- Index freshness diagnostics, MCP auto-refresh, and `cpl doctor`.
 - Persistent embedding DB in `.cpl/vector_db.json`.
 - Embedding backends:
   - `local-hash` offline default;
@@ -128,6 +129,7 @@ cargo run -- retrieve --root . "Where is retrieve implemented?"
 cargo run -- context --root . --max-tokens 64000 "Why does the build fail around hilog?"
 cargo run -- panel --root . "architecture retrieval"
 cargo run -- index-build --root .
+cargo run -- index-refresh --root .
 cargo run -- index-db --root .
 cargo run -- doctor --root .
 ```
@@ -152,6 +154,7 @@ Build the structural SQLite index:
 
 ```powershell
 cargo run -- index-build --root .
+cargo run -- index-refresh --root .
 cargo run -- index-db --root .
 ```
 
@@ -216,6 +219,7 @@ GET  http://127.0.0.1:3878/references?symbol=retrieve
 GET  http://127.0.0.1:3878/embed-search?query=opencode%20mcp&limit=5
 POST http://127.0.0.1:3878/embeddings/rebuild
 POST http://127.0.0.1:3878/index/rebuild
+POST http://127.0.0.1:3878/index/refresh
 GET  http://127.0.0.1:3878/index-db
 GET  http://127.0.0.1:3878/index/freshness
 GET  http://127.0.0.1:3878/doctor
@@ -238,6 +242,7 @@ cpl index
 cpl index-build
 cpl index-db
 cpl index-freshness
+cpl index-refresh [--max-incremental-files N]
 cpl doctor
 cpl graph
 cpl chunks [query]

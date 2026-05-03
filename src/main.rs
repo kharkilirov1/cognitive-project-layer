@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use cognitive_project_layer::CognitiveProjectLayer;
 use cognitive_project_layer::budget::ContextBudgetManager;
 use cognitive_project_layer::doctor;
 use cognitive_project_layer::embedding::{EmbeddingClient, EmbeddingConfig};
@@ -13,6 +12,9 @@ use cognitive_project_layer::persistent_vector::{PersistentVectorDb, build_and_s
 use cognitive_project_layer::qdrant::{QdrantConfig, QdrantVectorClient};
 use cognitive_project_layer::scanner::ProjectScanner;
 use cognitive_project_layer::tools::FallbackTools;
+use cognitive_project_layer::{
+    CognitiveProjectLayer, DEFAULT_INDEX_REFRESH_LIMIT, refresh_or_rebuild_persistent_index,
+};
 use serde_json::{Value, json};
 
 #[derive(Debug, Parser)]
@@ -95,6 +97,13 @@ enum Command {
     IndexFreshness {
         #[arg(long)]
         json: bool,
+    },
+    /// Refresh .cpl/index.sqlite incrementally, rebuilding only when needed.
+    IndexRefresh {
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = DEFAULT_INDEX_REFRESH_LIMIT)]
+        max_incremental_files: usize,
     },
     /// Diagnose CPL binaries, MCP config, SQLite index, vector DB, and Ollama.
     Doctor {
@@ -359,6 +368,21 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&freshness)?);
             } else {
                 println!("{}", freshness.render_human());
+            }
+        }
+        Command::IndexRefresh {
+            json,
+            max_incremental_files,
+        } => {
+            let result = refresh_or_rebuild_persistent_index(
+                &cli.root,
+                ContextBudgetManager::default().max_tokens,
+                max_incremental_files,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", result.render_human());
             }
         }
         Command::Doctor { json } => {
@@ -769,7 +793,10 @@ fn opencode_config(
                     "CPL_ROOT": portable_path(root),
                     "CPL_EMBEDDING_BACKEND": embedding_backend,
                     "CPL_EMBEDDING_MODEL": embedding_model,
-                    "CPL_EMBEDDING_DIMENSIONS": embedding_dimensions.to_string()
+                    "CPL_EMBEDDING_DIMENSIONS": embedding_dimensions.to_string(),
+                    "CPL_INDEX_AUTO_REFRESH": "1",
+                    "CPL_INDEX_REFRESH_LIMIT": DEFAULT_INDEX_REFRESH_LIMIT.to_string(),
+                    "CPL_INDEX_AUTO_REFRESH_INTERVAL_MS": "2000"
                 }
             }
         }
@@ -979,6 +1006,22 @@ mod tests {
                 assert_eq!(max_tokens, 64_000);
             }
             _ => panic!("expected context command"),
+        }
+    }
+
+    #[test]
+    fn index_refresh_command_accepts_incremental_limit() {
+        let cli = Cli::parse_from(["cpl", "index-refresh", "--max-incremental-files", "7"]);
+
+        match cli.command {
+            Command::IndexRefresh {
+                json,
+                max_incremental_files,
+            } => {
+                assert!(!json);
+                assert_eq!(max_incremental_files, 7);
+            }
+            _ => panic!("expected index-refresh command"),
         }
     }
 

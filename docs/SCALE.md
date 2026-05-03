@@ -72,12 +72,15 @@ cpl-mcp --root . --max-tokens 64000
 - Warm MCP/HTTP path: best for coding agents.
 - `.gitignore` / `.cplignore`: primary control for monorepos and generated code.
 - Persistent structural metadata exists in `.cpl/index.sqlite`.
+- Fresh structural metadata can warm-start symbols, references, graph, and chunks.
+- `index-refresh` incrementally updates changed files and falls back to full rebuild.
 - Persistent embeddings exist in `.cpl/vector_db.json`.
 
 Build or inspect the structural index:
 
 ```bash
 cpl index-build --root .
+cpl index-refresh --root .
 cpl index-db --root .
 cpl index-freshness --root .
 cpl doctor --root .
@@ -87,19 +90,23 @@ HTTP/MCP equivalents:
 
 ```text
 POST /index/rebuild
+POST /index/refresh
 GET  /index-db
 GET  /index/freshness
 cpl_index_build
 cpl_index_db
 cpl_index_freshness
+cpl_index_refresh
 ```
 
 ## Next scale milestone
 
 Fresh SQLite indexes are now used as the warm-start source for symbols,
-references, graph, and chunks. The next scale milestone is finer-grained
-incremental persistence:
+references, graph, and chunks, and changed-file refresh can update SQLite
+without rebuilding the entire cache. The next scale milestone is reducing the
+remaining costs around semantic/vector persistence:
 
-- changed-file incremental refresh against the SQLite cache;
 - regression thresholds for the large synthetic benchmark;
 - optional persisted lexical/vector cache for even faster warm retrieval.
+- broader stress tests for symbol/reference invalidation across very large
+  cross-file edits.
