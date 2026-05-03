@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::budget::ContextBudgetManager;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
+use crate::persistent_index::PersistentIndex;
 use crate::persistent_vector::build_and_save_default;
 use crate::tools::FallbackTools;
 use crate::{CognitiveProjectLayer, scanner::ProjectScanner};
@@ -251,6 +252,27 @@ impl McpServer {
                     path.display()
                 ))
             }
+            "cpl_index_build" => {
+                let layer = self.layer_mut()?;
+                let (summary, path) = PersistentIndex::build_default(
+                    &layer.root,
+                    &layer.scan,
+                    &layer.symbols,
+                    &layer.references,
+                    &layer.graph,
+                    &layer.vector_store.chunks,
+                )?;
+                Ok(format!(
+                    "{}\nSaved: {}",
+                    summary.render_human(),
+                    path.display()
+                ))
+            }
+            "cpl_index_db" => {
+                let summary = PersistentIndex::summary_default(&self.root)?
+                    .context("persistent SQLite index not found; call cpl_index_build first")?;
+                Ok(summary.render_human())
+            }
             "cpl_tree" => {
                 let depth = args
                     .get("depth")
@@ -352,6 +374,16 @@ fn tool_definitions() -> Vec<Value> {
                 "model": {"type": "string"},
                 "dimensions": {"type": "integer", "minimum": 8}
             }),
+        ),
+        tool(
+            "cpl_index_build",
+            "Build persistent structural SQLite index under .cpl/index.sqlite.",
+            json!({}),
+        ),
+        tool(
+            "cpl_index_db",
+            "Show persistent structural SQLite index summary.",
+            json!({}),
         ),
         tool(
             "cpl_tree",

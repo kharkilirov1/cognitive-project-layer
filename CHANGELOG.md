@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## 0.2.0 - 2026-05-03
+
+### Added
+
+- Persistent structural SQLite index in `.cpl/index.sqlite`.
+- CLI commands `cpl index-build` and `cpl index-db`.
+- MCP tools `cpl_index_build` and `cpl_index_db`.
+- HTTP endpoints `POST /index/rebuild` and `GET /index-db`.
+- `docs/PERSISTENCE.md` covering structural and embedding persistence.
+
+### Changed
+
+- Release archives include the `docs/` directory.
+
 ## 0.1.3 - 2026-05-03
 
 ### Added

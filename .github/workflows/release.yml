@@ -52,6 +52,7 @@ jobs:
           cp target/release/cpl "dist/${package}/"
           cp target/release/cpl-mcp "dist/${package}/"
           cp README.md LICENSE NOTICE CHANGELOG.md install.sh install.ps1 "dist/${package}/"
+          cp -R docs "dist/${package}/docs"
           tar -C dist -czf "dist/${package}.tar.gz" "${package}"
 
       - name: Package Windows binaries
@@ -64,6 +65,7 @@ jobs:
           Copy-Item target/release/cpl.exe "dist/$package/"
           Copy-Item target/release/cpl-mcp.exe "dist/$package/"
           Copy-Item README.md,LICENSE,NOTICE,CHANGELOG.md,install.sh,install.ps1 "dist/$package/"
+          Copy-Item docs "dist/$package/docs" -Recurse
           Compress-Archive -Path "dist/$package/*" -DestinationPath "dist/$package.zip" -Force
 
       - name: Upload package artifact

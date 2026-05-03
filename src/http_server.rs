@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use crate::CognitiveProjectLayer;
 use crate::budget::ContextBudgetManager;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
+use crate::persistent_index::PersistentIndex;
 use crate::persistent_vector::{PersistentVectorDb, build_and_save_default};
 use crate::scanner::ProjectScanner;
 use crate::tools::FallbackTools;
@@ -105,6 +106,8 @@ fn route_request(
                 "/references?symbol=...",
                 "/embed-search?query=...",
                 "/embeddings/rebuild",
+                "/index-db",
+                "/index/rebuild",
                 "/tree?depth=3",
                 "/grep?pattern=..."
             ]
@@ -210,6 +213,28 @@ fn route_request(
             let db = PersistentVectorDb::load_default(root)?
                 .context("persistent vector DB not found; call /embeddings/rebuild first")?;
             Ok(json!({ "db": db, "text": db.render_summary() }))
+        }
+        ("POST", "/index/rebuild") => with_layer(layer, |layer| {
+            let (summary, path) = PersistentIndex::build_default(
+                &layer.root,
+                &layer.scan,
+                &layer.symbols,
+                &layer.references,
+                &layer.graph,
+                &layer.vector_store.chunks,
+            )?;
+            let text = format!("{}\nSaved: {}", summary.render_human(), path.display());
+            Ok(json!({
+                "summary": summary,
+                "path": path,
+                "text": text
+            }))
+        }),
+        ("GET", "/index-db") => {
+            let summary = PersistentIndex::summary_default(root)?
+                .context("persistent SQLite index not found; call /index/rebuild first")?;
+            let text = summary.render_human();
+            Ok(json!({ "summary": summary, "text": text }))
         }
         ("GET", "/tree") => {
             let depth = input_usize(&request, "depth").unwrap_or(3);

@@ -36,6 +36,11 @@ jobs:
       - name: Build binaries
         run: cargo build --bins
 
+      - name: SQLite index smoke
+        run: |
+          cargo run --quiet --bin cpl -- --root . index-build
+          cargo run --quiet --bin cpl -- --root . index-db --json
+
       - name: Python script syntax
         run: python -m py_compile scripts/eval_retrieval.py scripts/bench_cli.py scripts/bench_mcp.py
 

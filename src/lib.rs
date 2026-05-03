@@ -9,6 +9,7 @@ pub mod http_server;
 pub mod indexer;
 pub mod mcp_server;
 pub mod memory;
+pub mod persistent_index;
 pub mod persistent_vector;
 pub mod qdrant;
 pub mod references;

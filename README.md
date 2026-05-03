@@ -29,6 +29,7 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - References/usages index.
 - Code-aware chunks with stable IDs and inferred line ranges.
 - Local TF-IDF vector search with no network dependency.
+- Persistent structural SQLite index in `.cpl/index.sqlite`.
 - Persistent embedding DB in `.cpl/vector_db.json`.
 - Embedding backends:
   - `local-hash` offline default;
@@ -85,6 +86,7 @@ Each release also includes `SHA256SUMS`. The archives contain:
 - `LICENSE`
 - `NOTICE`
 - `CHANGELOG.md`
+- `docs/`
 - `install.sh`
 - `install.ps1`
 
@@ -123,6 +125,8 @@ cargo run -- symbols --root . retrieve
 cargo run -- retrieve --root . "Where is retrieve implemented?"
 cargo run -- context --root . --max-tokens 64000 "Why does the build fail around hilog?"
 cargo run -- panel --root . "architecture retrieval"
+cargo run -- index-build --root .
+cargo run -- index-db --root .
 ```
 
 After `cargo install --git`, use the installed binary:
@@ -140,6 +144,15 @@ cargo run -- embed-index --root . --backend local-hash --dimensions 1536
 cargo run -- vector-db --root .
 cargo run -- embed-search --root . "project graph retrieval" --limit 10
 ```
+
+Build the structural SQLite index:
+
+```powershell
+cargo run -- index-build --root .
+cargo run -- index-db --root .
+```
+
+Persistence details: [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md).
 
 Use Ollama embeddings:
 
@@ -199,6 +212,8 @@ GET  http://127.0.0.1:3878/symbols?query=retrieve
 GET  http://127.0.0.1:3878/references?symbol=retrieve
 GET  http://127.0.0.1:3878/embed-search?query=opencode%20mcp&limit=5
 POST http://127.0.0.1:3878/embeddings/rebuild
+POST http://127.0.0.1:3878/index/rebuild
+GET  http://127.0.0.1:3878/index-db
 GET  http://127.0.0.1:3878/tree?depth=3
 GET  http://127.0.0.1:3878/grep?pattern=EntryAbility
 ```
@@ -215,6 +230,8 @@ cpl symbols [query]
 cpl retrieve <query...>
 cpl context [--max-tokens N] <query...>
 cpl index
+cpl index-build
+cpl index-db
 cpl graph
 cpl chunks [query]
 cpl embed-index
@@ -273,6 +290,7 @@ src/
   chunk.rs           rich code-aware chunks
   vector.rs          local TF-IDF vector store
   embedding.rs       embedding providers
+  persistent_index.rs SQLite structural index
   persistent_vector.rs persistent vector DB
   qdrant.rs          Qdrant adapter
   mcp_server.rs      MCP stdio server
@@ -289,6 +307,7 @@ evals/
   fixtures/            small Rust, TypeScript, and ArkTS projects
 docs/
   INSTALL.md
+  PERSISTENCE.md
   SCALE.md
   EVALS.md
   PROFILES.md

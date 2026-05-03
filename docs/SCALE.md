@@ -71,14 +71,30 @@ cpl-mcp --root . --max-tokens 64000
 - Cold CLI path: best for diagnostics and scripts.
 - Warm MCP/HTTP path: best for coding agents.
 - `.gitignore` / `.cplignore`: primary control for monorepos and generated code.
-- Persistent embeddings already exist in `.cpl/vector_db.json`.
+- Persistent structural metadata exists in `.cpl/index.sqlite`.
+- Persistent embeddings exist in `.cpl/vector_db.json`.
+
+Build or inspect the structural index:
+
+```bash
+cpl index-build --root .
+cpl index-db --root .
+```
+
+HTTP/MCP equivalents:
+
+```text
+POST /index/rebuild
+GET  /index-db
+cpl_index_build
+cpl_index_db
+```
 
 ## Next scale milestone
 
-The next major performance step is a persistent structural index:
+The next major performance step is using the persisted index as the warm-start
+source for large repositories:
 
-- file hash cache;
-- persisted symbols/references/graph/chunks;
+- changed-file incremental refresh against the SQLite cache;
 - warm startup from disk;
-- changed-file incremental refresh;
 - large synthetic benchmark fixture and regression thresholds.

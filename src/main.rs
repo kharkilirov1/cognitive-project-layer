@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use cognitive_project_layer::CognitiveProjectLayer;
 use cognitive_project_layer::budget::ContextBudgetManager;
 use cognitive_project_layer::embedding::{EmbeddingClient, EmbeddingConfig};
+use cognitive_project_layer::persistent_index::PersistentIndex;
 use cognitive_project_layer::persistent_vector::{PersistentVectorDb, build_and_save_default};
 use cognitive_project_layer::qdrant::{QdrantConfig, QdrantVectorClient};
 use cognitive_project_layer::scanner::ProjectScanner;
@@ -76,6 +77,16 @@ enum Command {
     },
     /// Show lazy indexer state.
     Index {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build and persist structural SQLite index under .cpl/index.sqlite.
+    IndexBuild {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show persistent structural SQLite index summary.
+    IndexDb {
         #[arg(long)]
         json: bool,
     },
@@ -300,6 +311,33 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&layer.indexer)?);
             } else {
                 println!("{}", layer.indexer.render_status());
+            }
+        }
+        Command::IndexBuild { json } => {
+            let layer = CognitiveProjectLayer::initialize(&cli.root)?;
+            let (summary, path) = PersistentIndex::build_default(
+                &layer.root,
+                &layer.scan,
+                &layer.symbols,
+                &layer.references,
+                &layer.graph,
+                &layer.vector_store.chunks,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("{}", summary.render_human());
+                println!("Saved: {}", path.display());
+            }
+        }
+        Command::IndexDb { json } => {
+            let root = cli.root.canonicalize()?;
+            let summary = PersistentIndex::summary_default(&root)?
+                .context("persistent SQLite index not found; run `cpl index-build` first")?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("{}", summary.render_human());
             }
         }
         Command::Graph { json } => {
