@@ -33,7 +33,8 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Warm-start from fresh SQLite structural indexes.
 - Incremental SQLite index refresh with rebuild fallback.
 - Index freshness diagnostics, MCP auto-refresh, and `cpl doctor`.
-- Persistent embedding DB in `.cpl/vector_db.json`.
+- Persistent embedding DB in `.cpl/vectors.sqlite` with legacy `.cpl/vector_db.json` fallback.
+- Incremental embedding refresh by changed chunk path.
 - Embedding backends:
   - `local-hash` offline default;
   - Ollama local neural embeddings;
@@ -146,6 +147,7 @@ Build local embeddings:
 
 ```powershell
 cargo run -- embed-index --root . --backend local-hash --dimensions 1536
+cargo run -- embed-refresh --root . --backend local-hash --dimensions 1536
 cargo run -- vector-db --root .
 cargo run -- embed-search --root . "project graph retrieval" --limit 10
 ```
@@ -155,6 +157,7 @@ Build the structural SQLite index:
 ```powershell
 cargo run -- index-build --root .
 cargo run -- index-refresh --root .
+cargo run -- index-search --root . "validate token"
 cargo run -- index-db --root .
 ```
 
@@ -218,10 +221,12 @@ GET  http://127.0.0.1:3878/symbols?query=retrieve
 GET  http://127.0.0.1:3878/references?symbol=retrieve
 GET  http://127.0.0.1:3878/embed-search?query=opencode%20mcp&limit=5
 POST http://127.0.0.1:3878/embeddings/rebuild
+POST http://127.0.0.1:3878/embeddings/refresh
 POST http://127.0.0.1:3878/index/rebuild
 POST http://127.0.0.1:3878/index/refresh
 GET  http://127.0.0.1:3878/index-db
 GET  http://127.0.0.1:3878/index/freshness
+GET  http://127.0.0.1:3878/index/search?query=validate%20token
 GET  http://127.0.0.1:3878/doctor
 GET  http://127.0.0.1:3878/tree?depth=3
 GET  http://127.0.0.1:3878/grep?pattern=EntryAbility
@@ -242,11 +247,13 @@ cpl index
 cpl index-build
 cpl index-db
 cpl index-freshness
+cpl index-search <query...>
 cpl index-refresh [--max-incremental-files N]
 cpl doctor
 cpl graph
 cpl chunks [query]
 cpl embed-index
+cpl embed-refresh [--max-incremental-paths N]
 cpl embed-search <query...>
 cpl vector-db
 cpl qdrant-upsert
@@ -304,7 +311,7 @@ src/
   vector.rs          local TF-IDF vector store
   embedding.rs       embedding providers
   persistent_index.rs SQLite structural index
-  persistent_vector.rs persistent vector DB
+  persistent_vector.rs SQLite persistent vector DB
   qdrant.rs          Qdrant adapter
   mcp_server.rs      MCP stdio server
   http_server.rs     local HTTP API
@@ -316,6 +323,7 @@ scripts/
   bench_cli.py         CLI latency benchmark runner
   bench_mcp.py         MCP stdio warm benchmark runner
   bench_large_repo.py  synthetic large-repository benchmark
+  check_bench_thresholds.py benchmark regression gate
 evals/
   retrieval.json       retrieval eval cases
   fixtures/            small Rust, TypeScript, and ArkTS projects

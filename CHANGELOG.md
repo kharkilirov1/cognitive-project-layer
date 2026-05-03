@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## 0.5.0 - 2026-05-04
+
+### Added
+
+- SQLite embedding store `.cpl/vectors.sqlite` with legacy `.cpl/vector_db.json`
+  read fallback.
+- Incremental embedding refresh through `cpl embed-refresh`, MCP
+  `cpl_refresh_embeddings`, and HTTP `POST /embeddings/refresh`.
+- SQLite FTS5 lexical chunk index inside `.cpl/index.sqlite`.
+- FTS search through `cpl index-search`, MCP `cpl_index_search`, and HTTP
+  `GET/POST /index/search`.
+- Benchmark regression gate script `scripts/check_bench_thresholds.py`, wired
+  into CI and the scheduled benchmark workflow.
+
+### Changed
+
+- `cpl embed-index` now writes `.cpl/vectors.sqlite` by default.
+- Hybrid retrieval can use the persisted SQLite FTS index before grep fallback.
+- Structural SQLite schema version increased to rebuild indexes with FTS.
+
 ## 0.4.0 - 2026-05-03
 
 ### Added

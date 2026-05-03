@@ -75,8 +75,12 @@ The large benchmark generates a temporary Rust repository and measures:
 - `index-freshness`;
 - `index-refresh` when unchanged;
 - `index-refresh` after one source file changed;
+- `index-search` against the SQLite FTS index;
 - warm skeleton after `.cpl/index.sqlite` exists;
 - warm retrieval after `.cpl/index.sqlite` exists.
+- local-hash `embed-index`;
+- unchanged `embed-refresh`;
+- one-file `embed-refresh`.
 
 ```powershell
 cargo build --release --bins
@@ -88,6 +92,17 @@ Optional JSON output:
 ```powershell
 python scripts/bench_large_repo.py --json-out .cpl\eval-results\large-bench.json
 ```
+
+Regression gate:
+
+```powershell
+python scripts/check_bench_thresholds.py --input .cpl\eval-results\large-bench.json
+```
+
+The gate checks p95 latency for cold scan, cold skeleton, structural index
+build/freshness/refresh/search, warm skeleton/retrieval, and local-hash
+embedding build/refresh. Thresholds can be overridden with repeated
+`--threshold operation:milliseconds` arguments.
 
 ## GitHub Actions
 
@@ -101,3 +116,6 @@ Actions summary, and uploads JSON artifacts:
 - scheduled: weekly on Monday;
 - automatic: pushes to `main` that touch CPL source, evals, benchmark scripts,
   Cargo files, or the benchmark workflow itself.
+
+Both CI and the scheduled benchmark workflow run `check_bench_thresholds.py` so
+major latency regressions fail visibly instead of only being uploaded as data.

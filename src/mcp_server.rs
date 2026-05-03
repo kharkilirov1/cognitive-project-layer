@@ -9,7 +9,7 @@ use crate::budget::ContextBudgetManager;
 use crate::doctor;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
 use crate::persistent_index::{PersistentIndex, PersistentIndexRefreshMode};
-use crate::persistent_vector::build_and_save_default;
+use crate::persistent_vector::{build_and_save_default, refresh_and_save_default};
 use crate::tools::FallbackTools;
 use crate::{
     CognitiveProjectLayer, DEFAULT_INDEX_REFRESH_LIMIT, refresh_or_rebuild_persistent_index,
@@ -259,6 +259,29 @@ impl McpServer {
                     path.display()
                 ))
             }
+            "cpl_refresh_embeddings" => {
+                let backend = optional_string(&args, "backend").unwrap_or_else(|| "ollama".into());
+                let model =
+                    optional_string(&args, "model").or_else(|| Some("nomic-embed-text".into()));
+                let dimensions = args
+                    .get("dimensions")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize)
+                    .unwrap_or(768);
+                let max_incremental_paths =
+                    optional_usize(&args, "max_incremental_paths").unwrap_or(128);
+                let config = embedding_config(&backend, model, dimensions)?;
+                let root = self.root.clone();
+                let layer = self.layer_mut()?;
+                let (result, db) = refresh_and_save_default(
+                    &root,
+                    &layer.vector_store.chunks,
+                    config,
+                    max_incremental_paths,
+                )?;
+                layer.persistent_vector_db = Some(db);
+                Ok(result.render_human())
+            }
             "cpl_index_build" => {
                 let layer = self.layer_mut()?;
                 let (summary, path) = PersistentIndex::build_default(
@@ -284,6 +307,26 @@ impl McpServer {
                 let scan = ProjectScanner::default().scan(&self.root)?;
                 let freshness = PersistentIndex::freshness_default(&self.root, &scan)?;
                 Ok(freshness.render_human())
+            }
+            "cpl_index_search" => {
+                let query = required_string(&args, "query")?;
+                Ok(
+                    PersistentIndex::search_fts_default(&self.root, &query, limit_arg(&args, 10))?
+                        .into_iter()
+                        .map(|hit| {
+                            format!(
+                                "[{:.2}] {}:{}-{} {:?} symbols={}",
+                                hit.score,
+                                hit.chunk.path.display(),
+                                hit.chunk.line_start,
+                                hit.chunk.line_end,
+                                hit.chunk.chunk_type,
+                                hit.chunk.symbols.join(", ")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
             }
             "cpl_index_refresh" => {
                 let max_incremental_files = optional_usize(&args, "max_incremental_files")
@@ -425,11 +468,21 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "cpl_build_embeddings",
-            "Build persistent embeddings DB. Defaults to local Ollama nomic-embed-text.",
+            "Build persistent embeddings DB under .cpl/vectors.sqlite. Defaults to local Ollama nomic-embed-text.",
             json!({
                 "backend": {"type": "string", "enum": ["ollama", "local-hash", "openai-compatible", "openai"]},
                 "model": {"type": "string"},
                 "dimensions": {"type": "integer", "minimum": 8}
+            }),
+        ),
+        tool(
+            "cpl_refresh_embeddings",
+            "Refresh persistent embeddings incrementally when possible.",
+            json!({
+                "backend": {"type": "string", "enum": ["ollama", "local-hash", "openai-compatible", "openai"]},
+                "model": {"type": "string"},
+                "dimensions": {"type": "integer", "minimum": 8},
+                "max_incremental_paths": {"type": "integer", "minimum": 0}
             }),
         ),
         tool(
@@ -446,6 +499,15 @@ fn tool_definitions() -> Vec<Value> {
             "cpl_index_freshness",
             "Check whether the persistent SQLite index is fresh for current project files.",
             json!({}),
+        ),
+        tool(
+            "cpl_index_search",
+            "Search the SQLite FTS lexical chunk index.",
+            json!({
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+            })
+            .with_required(&["query"]),
         ),
         tool(
             "cpl_index_refresh",
@@ -677,6 +739,12 @@ mod tests {
         let tools = tool_definitions();
         assert!(tools.iter().any(|tool| tool["name"] == "cpl_retrieve"));
         assert!(tools.iter().any(|tool| tool["name"] == "cpl_index_refresh"));
+        assert!(tools.iter().any(|tool| tool["name"] == "cpl_index_search"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "cpl_refresh_embeddings")
+        );
         assert!(tools.iter().all(|tool| tool.get("inputSchema").is_some()));
         let context = tools
             .iter()

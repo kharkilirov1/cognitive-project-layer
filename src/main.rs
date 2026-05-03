@@ -8,7 +8,9 @@ use cognitive_project_layer::budget::ContextBudgetManager;
 use cognitive_project_layer::doctor;
 use cognitive_project_layer::embedding::{EmbeddingClient, EmbeddingConfig};
 use cognitive_project_layer::persistent_index::PersistentIndex;
-use cognitive_project_layer::persistent_vector::{PersistentVectorDb, build_and_save_default};
+use cognitive_project_layer::persistent_vector::{
+    PersistentVectorDb, build_and_save_default, refresh_and_save_default,
+};
 use cognitive_project_layer::qdrant::{QdrantConfig, QdrantVectorClient};
 use cognitive_project_layer::scanner::ProjectScanner;
 use cognitive_project_layer::tools::FallbackTools;
@@ -98,6 +100,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Search the SQLite FTS lexical chunk index.
+    IndexSearch {
+        #[arg(required = true)]
+        query: Vec<String>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Refresh .cpl/index.sqlite incrementally, rebuilding only when needed.
     IndexRefresh {
         #[arg(long)]
@@ -123,7 +134,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Build and persist embedding vector DB under .cpl/vector_db.json.
+    /// Build and persist embedding vector DB under .cpl/vectors.sqlite.
     EmbedIndex {
         #[arg(long, default_value = "local-hash")]
         backend: String,
@@ -133,6 +144,21 @@ enum Command {
         endpoint: Option<String>,
         #[arg(long, default_value_t = 1536)]
         dimensions: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Refresh persistent embeddings incrementally when possible.
+    EmbedRefresh {
+        #[arg(long, default_value = "local-hash")]
+        backend: String,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long, default_value_t = 1536)]
+        dimensions: usize,
+        #[arg(long, default_value_t = DEFAULT_INDEX_REFRESH_LIMIT)]
+        max_incremental_paths: usize,
         #[arg(long)]
         json: bool,
     },
@@ -370,6 +396,25 @@ fn main() -> Result<()> {
                 println!("{}", freshness.render_human());
             }
         }
+        Command::IndexSearch { query, limit, json } => {
+            let root = cli.root.canonicalize()?;
+            let hits = PersistentIndex::search_fts_default(&root, &query.join(" "), limit)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&hits)?);
+            } else {
+                for hit in hits {
+                    println!(
+                        "[{:.2}] {}:{}-{} {:?} symbols={}",
+                        hit.score,
+                        hit.chunk.path.display(),
+                        hit.chunk.line_start,
+                        hit.chunk.line_end,
+                        hit.chunk.chunk_type,
+                        hit.chunk.symbols.join(", ")
+                    );
+                }
+            }
+        }
         Command::IndexRefresh {
             json,
             max_incremental_files,
@@ -459,6 +504,28 @@ fn main() -> Result<()> {
             } else {
                 println!("{}", db.render_summary());
                 println!("Saved: {}", path.display());
+            }
+        }
+        Command::EmbedRefresh {
+            backend,
+            model,
+            endpoint,
+            dimensions,
+            max_incremental_paths,
+            json,
+        } => {
+            let layer = CognitiveProjectLayer::initialize(&cli.root)?;
+            let config = embedding_config_from_cli(&backend, model, endpoint, dimensions)?;
+            let (result, _db) = refresh_and_save_default(
+                &layer.root,
+                &layer.vector_store.chunks,
+                config,
+                max_incremental_paths,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", result.render_human());
             }
         }
         Command::EmbedSearch { query, limit, json } => {
@@ -1022,6 +1089,30 @@ mod tests {
                 assert_eq!(max_incremental_files, 7);
             }
             _ => panic!("expected index-refresh command"),
+        }
+    }
+
+    #[test]
+    fn embed_refresh_command_accepts_incremental_path_limit() {
+        let cli = Cli::parse_from([
+            "cpl",
+            "embed-refresh",
+            "--backend",
+            "local-hash",
+            "--max-incremental-paths",
+            "9",
+        ]);
+
+        match cli.command {
+            Command::EmbedRefresh {
+                backend,
+                max_incremental_paths,
+                ..
+            } => {
+                assert_eq!(backend, "local-hash");
+                assert_eq!(max_incremental_paths, 9);
+            }
+            _ => panic!("expected embed-refresh command"),
         }
     }
 

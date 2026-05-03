@@ -146,13 +146,26 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="cpl_build_embeddings",
-            description="Build persistent embeddings DB. Defaults to local Ollama nomic-embed-text.",
+            description="Build persistent SQLite embeddings DB. Defaults to local Ollama nomic-embed-text.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "backend": {"type": "string", "enum": ["ollama", "local-hash", "openai-compatible", "openai"]},
                     "model": {"type": "string"},
                     "dimensions": {"type": "integer", "minimum": 8},
+                },
+            },
+        ),
+        Tool(
+            name="cpl_refresh_embeddings",
+            description="Refresh persistent embeddings incrementally when possible.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "backend": {"type": "string", "enum": ["ollama", "local-hash", "openai-compatible", "openai"]},
+                    "model": {"type": "string"},
+                    "dimensions": {"type": "integer", "minimum": 8},
+                    "max_incremental_paths": {"type": "integer", "minimum": 0},
                 },
             },
         ),
@@ -170,6 +183,18 @@ async def list_tools() -> list[Tool]:
             name="cpl_index_freshness",
             description="Check whether the persistent SQLite index is fresh.",
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="cpl_index_search",
+            description="Search the SQLite FTS lexical chunk index.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+                "required": ["query"],
+            },
         ),
         Tool(
             name="cpl_index_refresh",
@@ -257,12 +282,27 @@ async def call_tool(name: str, arguments: dict[str, Any] | None):
                     timeout=600,
                 )
             )
+        if name == "cpl_refresh_embeddings":
+            command = [
+                "embed-refresh",
+                "--backend",
+                str(args.get("backend", "ollama")),
+                "--model",
+                str(args.get("model", "nomic-embed-text")),
+                "--dimensions",
+                str(args.get("dimensions", 768)),
+                "--max-incremental-paths",
+                str(args.get("max_incremental_paths", 128)),
+            ]
+            return text(run_cpl(command, timeout=600))
         if name == "cpl_index_build":
             return text(run_cpl(["index-build"], timeout=600))
         if name == "cpl_index_db":
             return text(run_cpl(["index-db"]))
         if name == "cpl_index_freshness":
             return text(run_cpl(["index-freshness"]))
+        if name == "cpl_index_search":
+            return text(run_cpl(["index-search", str(args["query"]), "--limit", str(args.get("limit", 10))]))
         if name == "cpl_index_refresh":
             command = ["index-refresh"]
             if args.get("max_incremental_files") is not None:
@@ -292,7 +332,7 @@ async def main() -> None:
             write_stream,
             InitializationOptions(
                 server_name="cognitive-project-layer",
-                server_version="0.4.0",
+                server_version="0.5.0",
                 capabilities=app.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},

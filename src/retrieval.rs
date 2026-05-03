@@ -10,6 +10,7 @@ use crate::confidence::{
 };
 use crate::graph::ProjectGraph;
 use crate::memory::WorkingMemory;
+use crate::persistent_index::PersistentIndex;
 use crate::persistent_vector::PersistentVectorDb;
 use crate::references::ReferenceIndex;
 use crate::scanner::{ProjectScan, is_text_candidate};
@@ -206,7 +207,35 @@ impl HybridRetriever {
             }
         }
 
-        // 3. Grep
+        // 3. SQLite FTS lexical index
+        for hit in PersistentIndex::search_fts_default(root, query, 30).unwrap_or_default() {
+            let key = (hit.chunk.path.clone(), hit.chunk.line_start);
+            let entry = candidates.entry(key).or_insert_with(|| CandidateChunk {
+                path: hit.chunk.path.clone(),
+                line_start: hit.chunk.line_start,
+                line_end: hit.chunk.line_end,
+                preview: hit.chunk.source.clone(),
+                symbols: hit.chunk.symbols.clone(),
+                symbol_score: 0.0,
+                lexical_score: 0.0,
+                semantic_score: 0.0,
+                graph_score: 0.0,
+                recency_score: 0.0,
+                final_score: 0.0,
+                reasons: Vec::new(),
+            });
+            entry.lexical_score = entry.lexical_score.max(hit.score);
+            for symbol in hit.chunk.symbols {
+                if !entry.symbols.contains(&symbol) {
+                    entry.symbols.push(symbol);
+                }
+            }
+            if !entry.reasons.iter().any(|reason| reason == "sqlite_fts") {
+                entry.reasons.push("sqlite_fts".to_string());
+            }
+        }
+
+        // 4. Grep
         for term in analysis.terms.iter().take(8) {
             for hit in FallbackTools::grep(root, term, 40)? {
                 let preview = FallbackTools::open_file_excerpt(root, &hit.path, hit.line_number, 2)
@@ -233,7 +262,7 @@ impl HybridRetriever {
             }
         }
 
-        // 4. Vector search (TF-IDF)
+        // 5. Vector search (TF-IDF)
         for hit in vector_store.search(query, 30) {
             let key = (hit.chunk.path.clone(), hit.chunk.line_start);
             let entry = candidates.entry(key).or_insert_with(|| CandidateChunk {
@@ -261,7 +290,7 @@ impl HybridRetriever {
             }
         }
 
-        // 5. Persistent vector DB (dense embeddings)
+        // 6. Persistent vector DB (dense embeddings)
         if let Some(db) = persistent_vector_db
             && let Ok(client) = crate::embedding::EmbeddingClient::new(db.config()).embed_one(query)
         {
@@ -297,7 +326,7 @@ impl HybridRetriever {
             }
         }
 
-        // 6. Skeleton context paths
+        // 7. Skeleton context paths
         for rel_path in skeleton_context_paths(skeleton, &analysis) {
             let abs = validate_path(root, &rel_path).ok();
             let abs = match abs {
@@ -326,7 +355,7 @@ impl HybridRetriever {
             entry.graph_score = entry.graph_score.max(0.35);
         }
 
-        // 7. Graph expansion
+        // 8. Graph expansion
         let mut graph_seeds = candidates
             .values()
             .filter(|chunk| chunk.symbol_score > 0.0 || chunk.semantic_score > 0.10)
@@ -337,10 +366,10 @@ impl HybridRetriever {
             add_file_candidate(root, &mut candidates, &rel_path, 1, "graph_expansion", 0.55);
         }
 
-        // 8. Boost from working memory
+        // 9. Boost from working memory
         boost_related_candidates(&mut candidates, memory);
 
-        // 9. Score
+        // 10. Score
         score_candidates(&mut candidates, scan, &analysis);
 
         let mut chunks = candidates.into_values().collect::<Vec<_>>();

@@ -64,9 +64,11 @@ Example files:
 - `cpl_index_build` — build `.cpl/index.sqlite`.
 - `cpl_index_db` — inspect SQLite index summary.
 - `cpl_index_freshness` — check whether SQLite index matches current files.
+- `cpl_index_search` — search the SQLite FTS lexical chunk index.
 - `cpl_index_refresh` — incrementally refresh SQLite index or rebuild when needed.
 - `cpl_embed_search` — search persistent local neural embedding DB.
 - `cpl_build_embeddings` — rebuild persistent embeddings DB; defaults to Ollama `nomic-embed-text`.
+- `cpl_refresh_embeddings` — incrementally refresh persistent embeddings when possible.
 - `cpl_tree` — ignored-aware project file tree.
 - `cpl_grep` — grep over project text.
 - `cpl_panel` — text transparency/status panel.
@@ -92,16 +94,18 @@ Build/update local neural embeddings:
 ```powershell
 ollama pull nomic-embed-text
 cargo run -- embed-index --root . --backend ollama --model nomic-embed-text --dimensions 768
+cargo run -- embed-refresh --root . --backend ollama --model nomic-embed-text --dimensions 768
 ```
 
 Generated DB:
 
 ```text
-.cpl/vector_db.json
+.cpl/vectors.sqlite
+.cpl/vector_db.json  # legacy fallback, if present
 ```
 
-Do not commit `.cpl/vector_db.json` for private repositories. It contains data
-derived from source code.
+Do not commit `.cpl/` for private repositories. It contains data derived from
+source code.
 
 ## Alternative HTTP API
 
@@ -113,6 +117,8 @@ Then local agents can call:
 
 ```text
 GET http://127.0.0.1:3878/retrieve?query=symbol_lookup
+GET http://127.0.0.1:3878/index/search?query=symbol_lookup
 GET http://127.0.0.1:3878/embed-search?query=opencode%20mcp&limit=5
 POST http://127.0.0.1:3878/embeddings/rebuild
+POST http://127.0.0.1:3878/embeddings/refresh
 ```

@@ -12,7 +12,9 @@ use crate::budget::ContextBudgetManager;
 use crate::doctor;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
 use crate::persistent_index::{PersistentIndex, PersistentIndexRefreshMode};
-use crate::persistent_vector::{PersistentVectorDb, build_and_save_default};
+use crate::persistent_vector::{
+    PersistentVectorDb, build_and_save_default, refresh_and_save_default,
+};
 use crate::scanner::ProjectScanner;
 use crate::tools::FallbackTools;
 use crate::{
@@ -109,8 +111,10 @@ fn route_request(
                 "/references?symbol=...",
                 "/embed-search?query=...",
                 "/embeddings/rebuild",
+                "/embeddings/refresh",
                 "/index-db",
                 "/index/freshness",
+                "/index/search?query=...",
                 "/index/refresh",
                 "/index/rebuild",
                 "/doctor",
@@ -215,6 +219,28 @@ fn route_request(
                 }))
             })
         }
+        ("POST", "/embeddings/refresh") => {
+            let backend = input_string(&request, "backend").unwrap_or_else(|| "ollama".to_string());
+            let model = input_string(&request, "model").or_else(|| Some("nomic-embed-text".into()));
+            let dimensions = input_usize(&request, "dimensions").unwrap_or(768);
+            let max_incremental_paths = input_usize(&request, "max_incremental_paths")
+                .unwrap_or(DEFAULT_INDEX_REFRESH_LIMIT);
+            let root = root.to_path_buf();
+            with_layer(layer, |layer| {
+                let config = embedding_config(&backend, model, dimensions)?;
+                let (result, db) = refresh_and_save_default(
+                    &root,
+                    &layer.vector_store.chunks,
+                    config,
+                    max_incremental_paths,
+                )?;
+                layer.persistent_vector_db = Some(db);
+                Ok(json!({
+                    "result": result,
+                    "text": result.render_human()
+                }))
+            })
+        }
         ("GET", "/vector-db") => {
             let db = PersistentVectorDb::load_default(root)?
                 .context("persistent vector DB not found; call /embeddings/rebuild first")?;
@@ -247,6 +273,12 @@ fn route_request(
             let freshness = PersistentIndex::freshness_default(root, &scan)?;
             let text = freshness.render_human();
             Ok(json!({ "freshness": freshness, "text": text }))
+        }
+        ("GET", "/index/search") | ("POST", "/index/search") => {
+            let query = required_input(&request, "query")?;
+            let limit = input_usize(&request, "limit").unwrap_or(10);
+            let hits = PersistentIndex::search_fts_default(root, &query, limit)?;
+            Ok(json!({ "hits": hits }))
         }
         ("POST", "/index/refresh") => {
             let max_incremental_files = input_usize(&request, "max_incremental_files")

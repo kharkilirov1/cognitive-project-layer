@@ -39,10 +39,18 @@ jobs:
       - name: SQLite index smoke
         run: |
           cargo run --quiet --bin cpl -- --root . index-build
+          cargo run --quiet --bin cpl -- --root . index-refresh
+          cargo run --quiet --bin cpl -- --root . index-search "persistent vector" --limit 3
           cargo run --quiet --bin cpl -- --root . index-db --json
 
+      - name: SQLite vector DB smoke
+        run: |
+          cargo run --quiet --bin cpl -- --root . embed-index --backend local-hash --dimensions 128
+          cargo run --quiet --bin cpl -- --root . embed-refresh --backend local-hash --dimensions 128
+          cargo run --quiet --bin cpl -- --root . embed-search "persistent vector" --limit 3
+
       - name: Python script syntax
-        run: python -m py_compile scripts/eval_retrieval.py scripts/bench_cli.py scripts/bench_mcp.py scripts/bench_large_repo.py
+        run: python -m py_compile scripts/eval_retrieval.py scripts/bench_cli.py scripts/bench_mcp.py scripts/bench_large_repo.py scripts/check_bench_thresholds.py
 
       - name: Retrieval eval
         run: python scripts/eval_retrieval.py --top-k 3
@@ -54,4 +62,13 @@ jobs:
         run: python scripts/bench_mcp.py --iterations 1 --warmup 0
 
       - name: Large synthetic benchmark smoke
-        run: python scripts/bench_large_repo.py --files 120 --symbols-per-file 2 --iterations 1 --warmup 0
+        run: >
+          python scripts/bench_large_repo.py
+          --files 120
+          --symbols-per-file 2
+          --iterations 1
+          --warmup 0
+          --json-out .cpl/eval-results/large-bench-smoke.json
+
+      - name: Benchmark regression gate
+        run: python scripts/check_bench_thresholds.py --input .cpl/eval-results/large-bench-smoke.json

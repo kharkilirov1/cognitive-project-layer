@@ -212,8 +212,22 @@ def main() -> int:
             args.warmup,
             lambda tick: mutate_one_source_file(root, tick),
         )))
+        records.append(record("index_search_fts", measure(base, ["--root", str(root), "index-search", "--json", "feature linked"], REPO_ROOT, args.iterations, args.warmup)))
         records.append(record("warm_skeleton_sqlite", measure(base, ["--root", str(root), "skeleton", "--json"], REPO_ROOT, args.iterations, args.warmup)))
         records.append(record("warm_retrieve_sqlite", measure(base, ["--root", str(root), "retrieve", "--json", "feature 42 linked"], REPO_ROOT, args.iterations, args.warmup)))
+        records.append(record("embed_index_local_hash", measure(base, ["--root", str(root), "embed-index", "--backend", "local-hash", "--dimensions", "256", "--json"], REPO_ROOT, args.iterations, 0)))
+        records.append(record("embed_refresh_unchanged", measure(base, ["--root", str(root), "embed-refresh", "--backend", "local-hash", "--dimensions", "256", "--json"], REPO_ROOT, args.iterations, args.warmup)))
+        records.append(record("embed_refresh_one_file", measure_with_hook(
+            base,
+            ["--root", str(root), "embed-refresh", "--backend", "local-hash", "--dimensions", "256", "--json"],
+            REPO_ROOT,
+            args.iterations,
+            args.warmup,
+            lambda tick: (
+                mutate_one_source_file(root, tick),
+                run_command(base, ["--root", str(root), "index-refresh", "--json"], REPO_ROOT),
+            ),
+        )))
 
         print(f"Synthetic repo: {root}")
         print(f"Files: {args.files}; symbols_per_file: {args.symbols_per_file}")

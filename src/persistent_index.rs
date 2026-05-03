@@ -15,7 +15,7 @@ use crate::references::{ReferenceIndex, ReferenceKind, ReferenceLocation};
 use crate::scanner::{ProjectScan, detect_language, is_config_file, is_entry_candidate};
 use crate::symbols::{SymbolIndex, SymbolKind, SymbolLocation, Visibility};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistentIndexSummary {
@@ -83,6 +83,12 @@ pub struct PersistentIndexSnapshot {
     pub references: ReferenceIndex,
     pub graph: ProjectGraph,
     pub chunks: Vec<RichChunk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistentIndexFtsHit {
+    pub chunk: RichChunk,
+    pub score: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -262,27 +268,8 @@ impl PersistentIndex {
         }
 
         {
-            let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO chunks \
-                (id, file_path, line_start, line_end, chunk_type, signature, source, docs, \
-                 symbols_json, imports_json, module_path_json, text_hash) \
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            )?;
             for chunk in chunks {
-                stmt.execute(params![
-                    chunk.id,
-                    path_text(&chunk.path),
-                    chunk.line_start as i64,
-                    chunk.line_end as i64,
-                    format!("{:?}", chunk.chunk_type),
-                    chunk.signature,
-                    chunk.source,
-                    chunk.docs,
-                    serde_json::to_string(&chunk.symbols)?,
-                    serde_json::to_string(&chunk.imports)?,
-                    serde_json::to_string(&chunk.module_path)?,
-                    text_hash(&chunk.embed_text()),
-                ])?;
+                insert_chunk_row(&tx, chunk)?;
             }
         }
 
@@ -595,6 +582,73 @@ impl PersistentIndex {
             chunks,
         })
     }
+
+    pub fn search_fts_default(
+        root: &Path,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<PersistentIndexFtsHit>> {
+        let path = Self::default_path(root);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        Self::search_fts(&path, query, limit)
+    }
+
+    pub fn search_fts(
+        path: &Path,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<PersistentIndexFtsHit>> {
+        let Some(fts_query) = fts_query(query) else {
+            return Ok(Vec::new());
+        };
+        let conn = Connection::open(path)
+            .with_context(|| format!("failed to open SQLite index {}", path.display()))?;
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.file_path, c.line_start, c.line_end, c.chunk_type, c.signature,
+                    c.source, c.docs, c.symbols_json, c.imports_json, c.module_path_json,
+                    bm25(chunk_fts) AS rank
+             FROM chunk_fts
+             JOIN chunks c ON c.id = chunk_fts.id
+             WHERE chunk_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
+            let chunk_type: String = row.get(4)?;
+            let symbols_json: String = row.get(8)?;
+            let imports_json: String = row.get(9)?;
+            let module_path_json: String = row.get(10)?;
+            let rank: f64 = row.get(11)?;
+            let raw_score = if rank < 0.0 {
+                -rank as f32
+            } else {
+                1.0 / (1.0 + rank as f32)
+            };
+            Ok(PersistentIndexFtsHit {
+                chunk: RichChunk {
+                    id: row.get(0)?,
+                    path: PathBuf::from(row.get::<_, String>(1)?),
+                    line_start: row.get::<_, i64>(2)? as usize,
+                    line_end: row.get::<_, i64>(3)? as usize,
+                    chunk_type: parse_chunk_type(&chunk_type),
+                    signature: row.get(5)?,
+                    source: row.get(6)?,
+                    docs: row.get(7)?,
+                    symbols: serde_json::from_str(&symbols_json).unwrap_or_default(),
+                    imports: serde_json::from_str(&imports_json).unwrap_or_default(),
+                    module_path: serde_json::from_str(&module_path_json).unwrap_or_default(),
+                },
+                score: (raw_score / (raw_score + 1.0)).clamp(0.0, 1.0),
+            })
+        })?;
+        let mut hits = Vec::new();
+        for row in rows {
+            hits.push(row?);
+        }
+        Ok(hits)
+    }
 }
 
 fn create_schema(conn: &Connection) -> Result<()> {
@@ -646,6 +700,15 @@ fn create_schema(conn: &Connection) -> Result<()> {
             imports_json TEXT NOT NULL,
             module_path_json TEXT NOT NULL,
             text_hash TEXT NOT NULL
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
+            id UNINDEXED,
+            file_path UNINDEXED,
+            symbols,
+            signature,
+            source,
+            docs,
+            tokenize = 'unicode61'
         );
         CREATE TABLE IF NOT EXISTS graph_nodes (
             id TEXT PRIMARY KEY,
@@ -710,6 +773,10 @@ fn write_incremental_snapshot(
         )?;
         tx.execute(
             "DELETE FROM chunks WHERE file_path = ?1",
+            params![path_text(rel)],
+        )?;
+        tx.execute(
+            "DELETE FROM chunk_fts WHERE file_path = ?1",
             params![path_text(rel)],
         )?;
     }
@@ -862,6 +929,19 @@ fn insert_chunk_row(conn: &Connection, chunk: &RichChunk) -> Result<()> {
             serde_json::to_string(&chunk.imports)?,
             serde_json::to_string(&chunk.module_path)?,
             text_hash(&chunk.embed_text()),
+        ],
+    )?;
+    conn.execute(
+        "INSERT OR REPLACE INTO chunk_fts \
+        (id, file_path, symbols, signature, source, docs) \
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            chunk.id,
+            path_text(&chunk.path),
+            chunk.symbols.join(" "),
+            chunk.signature.as_deref().unwrap_or_default(),
+            chunk.source,
+            chunk.docs.as_deref().unwrap_or_default(),
         ],
     )?;
     Ok(())
@@ -1095,6 +1175,7 @@ fn clear_tables(conn: &Connection) -> Result<()> {
         DELETE FROM files;
         DELETE FROM symbols;
         DELETE FROM references_idx;
+        DELETE FROM chunk_fts;
         DELETE FROM chunks;
         DELETE FROM graph_nodes;
         DELETE FROM graph_edges;",
@@ -1165,6 +1246,35 @@ fn relative_path(root: &Path, path: &Path) -> PathBuf {
 
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn fts_query(query: &str) -> Option<String> {
+    let mut tokens = BTreeSet::new();
+    let mut current = String::new();
+    for ch in query.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            current.push(ch.to_ascii_lowercase());
+        } else if current.len() >= 2 {
+            tokens.insert(std::mem::take(&mut current));
+        } else {
+            current.clear();
+        }
+    }
+    if current.len() >= 2 {
+        tokens.insert(current);
+    }
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(
+            tokens
+                .into_iter()
+                .take(16)
+                .map(|token| format!("\"{token}\""))
+                .collect::<Vec<_>>()
+                .join(" OR "),
+        )
+    }
 }
 
 fn bool_i64(value: bool) -> i64 {
@@ -1452,6 +1562,41 @@ mod tests {
             .unwrap();
         assert!(snapshot.symbols.find("old_symbol").is_empty());
         assert!(!snapshot.symbols.find("new_symbol").is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_fts_finds_indexed_chunks() {
+        let root = temp_project("persistent_index_fts");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='tmp'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src").join("lib.rs"),
+            "pub fn validate_token(token: &str) -> bool { !token.is_empty() }\n",
+        )
+        .unwrap();
+
+        let layer = CognitiveProjectLayer::initialize(&root).unwrap();
+        PersistentIndex::build_default(
+            &layer.root,
+            &layer.scan,
+            &layer.symbols,
+            &layer.references,
+            &layer.graph,
+            &layer.vector_store.chunks,
+        )
+        .unwrap();
+
+        let hits = PersistentIndex::search_fts_default(&root, "validate token", 5).unwrap();
+        assert!(
+            hits.iter()
+                .any(|hit| hit.chunk.path == Path::new("src/lib.rs"))
+        );
 
         let _ = fs::remove_dir_all(root);
     }

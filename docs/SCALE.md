@@ -74,15 +74,19 @@ cpl-mcp --root . --max-tokens 64000
 - Persistent structural metadata exists in `.cpl/index.sqlite`.
 - Fresh structural metadata can warm-start symbols, references, graph, and chunks.
 - `index-refresh` incrementally updates changed files and falls back to full rebuild.
-- Persistent embeddings exist in `.cpl/vector_db.json`.
+- SQLite FTS lexical search is persisted inside `.cpl/index.sqlite`.
+- Persistent embeddings exist in `.cpl/vectors.sqlite` with legacy JSON fallback.
+- `embed-refresh` updates vectors only for changed chunk paths when possible.
 
 Build or inspect the structural index:
 
 ```bash
 cpl index-build --root .
 cpl index-refresh --root .
+cpl index-search --root . "auth route"
 cpl index-db --root .
 cpl index-freshness --root .
+cpl embed-refresh --root . --backend ollama --model nomic-embed-text --dimensions 768
 cpl doctor --root .
 ```
 
@@ -93,20 +97,25 @@ POST /index/rebuild
 POST /index/refresh
 GET  /index-db
 GET  /index/freshness
+GET  /index/search?query=...
+POST /embeddings/refresh
 cpl_index_build
 cpl_index_db
 cpl_index_freshness
+cpl_index_search
 cpl_index_refresh
+cpl_refresh_embeddings
 ```
 
 ## Next scale milestone
 
 Fresh SQLite indexes are now used as the warm-start source for symbols,
-references, graph, and chunks, and changed-file refresh can update SQLite
-without rebuilding the entire cache. The next scale milestone is reducing the
-remaining costs around semantic/vector persistence:
+references, graph, chunks, lexical FTS, and embeddings. Changed-file refresh can
+update structural and semantic SQLite caches without rebuilding the entire
+project. The next scale milestone is deeper stress coverage and finer invalidation:
 
-- regression thresholds for the large synthetic benchmark;
-- optional persisted lexical/vector cache for even faster warm retrieval.
+- stricter regression thresholds for the large synthetic benchmark;
 - broader stress tests for symbol/reference invalidation across very large
   cross-file edits.
+- optional DB-backed dense-vector search that avoids loading all vectors into
+  process memory.
