@@ -301,7 +301,8 @@ Current public profile:
 ## Current limitations
 
 - No LSP-backed semantic references yet.
-- No GUI transparency panel yet; current panel is text-based.
+- No dedicated desktop app yet; current UI is a local web dashboard plus the
+  text transparency panel.
 - Persistent vector DB refresh is chunk-path incremental, but embedding model
   changes still require a full vector rebuild.
 - SQLite vector search streams from the DB, but exact dense scoring is still

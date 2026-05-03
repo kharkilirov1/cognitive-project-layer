@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## 0.7.0 - 2026-05-04
+
+### Added
+
+- Built-in local web dashboard served by `cpl serve` at `/ui`, `/dashboard`,
+  and `/`.
+- Dashboard panels for health, scan summary, doctor status, SQLite freshness,
+  vector DB metadata, retrieval, FTS search, embedding search, maintenance
+  refresh actions, and eval/benchmark history.
+- HTTP endpoint `GET /benchmarks` for `.cpl/eval-results/*.json` summaries.
+- `docs/UI.md` with dashboard usage and safety notes.
+
 ## 0.6.0 - 2026-05-04
 
 ### Added

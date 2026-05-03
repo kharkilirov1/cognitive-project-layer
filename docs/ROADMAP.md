@@ -35,6 +35,7 @@ Status: in progress.
 - [ ] Golden tests for MCP tool outputs.
 - [ ] Better error messages for embedding provider failures.
 - [ ] Config file for profiles and ignored paths.
+- [x] Local dashboard UI for health, retrieval, refresh, and eval history.
 - [ ] Public demo repository and terminal recording.
 
 ## 0.3.x — Deeper code intelligence
@@ -49,5 +50,6 @@ Status: in progress.
 ## Later
 
 - [ ] GUI transparency panel.
+- [ ] Desktop app or richer web UI for trace exploration.
 - [ ] Multi-repository workspace mode.
 - [ ] Agent evaluation harness for edit success rate, not only retrieval quality.

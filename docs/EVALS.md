@@ -28,6 +28,9 @@ Optional JSON output:
 python scripts/eval_retrieval.py --json-out .cpl\eval-results\retrieval.json
 ```
 
+When `cpl serve` is running, saved `.cpl/eval-results/*.json` files are also
+summarized by `GET /benchmarks` and shown in the local dashboard at `/ui`.
+
 ## CLI benchmark
 
 The benchmark runner measures wall-clock latency for `scan`, `skeleton`, and

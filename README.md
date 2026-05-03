@@ -46,6 +46,7 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Confidence engine with `RagOnly`, `Hybrid`, and `FallbackExplore` strategies.
 - Context budget manager and text transparency panel.
 - CLI `cpl`, MCP stdio server `cpl-mcp`, Python MCP wrapper, and local HTTP API.
+- Built-in local dashboard UI for health, retrieval, refresh actions, and eval history.
 - File watcher and background refresh worker.
 - Fixture-based retrieval evals and CLI latency benchmarks.
 - Optional ArkTS/HarmonyOS profile; see [`docs/PROFILES.md`](docs/PROFILES.md).
@@ -214,6 +215,7 @@ Endpoints:
 
 ```text
 GET  http://127.0.0.1:3878/health
+GET  http://127.0.0.1:3878/ui
 GET  http://127.0.0.1:3878/scan
 GET  http://127.0.0.1:3878/skeleton
 GET  http://127.0.0.1:3878/retrieve?query=symbol_lookup
@@ -229,12 +231,15 @@ GET  http://127.0.0.1:3878/index-db
 GET  http://127.0.0.1:3878/index/freshness
 GET  http://127.0.0.1:3878/index/search?query=validate%20token
 GET  http://127.0.0.1:3878/doctor
+GET  http://127.0.0.1:3878/benchmarks
 GET  http://127.0.0.1:3878/tree?depth=3
 GET  http://127.0.0.1:3878/grep?pattern=EntryAbility
 ```
 
 Security note: keep the HTTP API bound to `127.0.0.1` unless you intentionally
 want another process or machine to access your project context.
+
+Dashboard details: [`docs/UI.md`](docs/UI.md).
 
 ## CLI overview
 
@@ -314,6 +319,7 @@ src/
   persistent_index.rs SQLite structural index
   persistent_vector.rs SQLite persistent vector DB
   qdrant.rs          Qdrant adapter
+  dashboard.rs       embedded local dashboard UI and benchmark summaries
   mcp_server.rs      MCP stdio server
   http_server.rs     local HTTP API
   watcher.rs         file watcher daemon
@@ -332,6 +338,7 @@ docs/
   INSTALL.md
   PERSISTENCE.md
   SCALE.md
+  UI.md
   EVALS.md
   PROFILES.md
   OPENCODE.md

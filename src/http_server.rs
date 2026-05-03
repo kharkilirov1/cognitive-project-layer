@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::budget::ContextBudgetManager;
+use crate::dashboard;
 use crate::doctor;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
 use crate::persistent_index::{PersistentIndex, PersistentIndexRefreshMode};
@@ -39,6 +40,7 @@ pub fn serve_project_with_budget(
     eprintln!("Root: {}", root.display());
     eprintln!("Context max tokens: {max_tokens}");
     eprintln!("Listening: http://{addr}");
+    eprintln!("Dashboard: http://{addr}/ui");
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -92,6 +94,12 @@ fn route_request(
     if request.method == "OPTIONS" {
         return empty_response(204);
     }
+    if request.method == "GET" && matches!(request.path.as_str(), "/" | "/ui" | "/dashboard") {
+        return html_response(200, dashboard::dashboard_html());
+    }
+    if request.method == "GET" && request.path == "/favicon.ico" {
+        return empty_response(204);
+    }
 
     let result: Result<Value> = (|| match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/health") => Ok(json!({
@@ -101,6 +109,9 @@ fn route_request(
         })),
         ("GET", "/tools") => Ok(json!({
             "tools": [
+                "/",
+                "/ui",
+                "/dashboard",
                 "/health",
                 "/scan",
                 "/skeleton",
@@ -117,6 +128,7 @@ fn route_request(
                 "/index/search?query=...",
                 "/index/refresh",
                 "/index/rebuild",
+                "/benchmarks",
                 "/doctor",
                 "/tree?depth=3",
                 "/grep?pattern=..."
@@ -300,6 +312,7 @@ fn route_request(
             let text = report.render_human();
             Ok(json!({ "report": report, "text": text }))
         }
+        ("GET", "/benchmarks") => dashboard::benchmark_history(root),
         ("GET", "/tree") => {
             let depth = input_usize(&request, "depth").unwrap_or(3);
             FallbackTools::file_tree(root, depth).map(|text| json!({ "text": text }))
@@ -419,6 +432,14 @@ fn json_response(status: u16, value: Value) -> HttpResponse {
     }
 }
 
+fn html_response(status: u16, html: &str) -> HttpResponse {
+    HttpResponse {
+        status,
+        content_type: "text/html; charset=utf-8",
+        body: html.as_bytes().to_vec(),
+    }
+}
+
 fn empty_response(status: u16) -> HttpResponse {
     HttpResponse {
         status,
@@ -523,5 +544,16 @@ mod tests {
         assert_eq!(path, "/retrieve");
         assert_eq!(query.get("query").unwrap(), "auth login token");
         assert_eq!(query.get("limit").unwrap(), "3");
+    }
+
+    #[test]
+    fn dashboard_paths_are_html() {
+        let response = html_response(200, dashboard::dashboard_html());
+        assert_eq!(response.content_type, "text/html; charset=utf-8");
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("Dashboard")
+        );
     }
 }

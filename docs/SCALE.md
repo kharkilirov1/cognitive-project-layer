@@ -79,6 +79,8 @@ cpl-mcp --root . --max-tokens 64000
 - `embed-refresh` updates vectors only for changed chunk paths when possible.
 - SQLite vector DBs load metadata lazily and stream dense search from the DB, so
   warm startup does not need to materialize every vector in memory.
+- `cpl serve` exposes a local dashboard at `/ui` for index health, retrieval,
+  refresh actions, and benchmark/eval history.
 
 Build or inspect the structural index:
 
@@ -114,9 +116,10 @@ cpl_refresh_embeddings
 Fresh SQLite indexes are now used as the warm-start source for symbols,
 references, graph, chunks, lexical FTS, and embedding metadata/search. Changed-file
 refresh can update structural and semantic SQLite caches without rebuilding the
-entire project. The next scale milestone is deeper stress coverage and product UI:
+entire project. The local dashboard makes this state visible. The next scale
+milestone is deeper stress coverage and workspace features:
 
 - stricter regression thresholds for the large synthetic benchmark;
 - broader stress tests for symbol/reference invalidation across very large
   cross-file edits.
-- a local dashboard for index health, retrieval traces, and benchmark history.
+- multi-repository workspace views.

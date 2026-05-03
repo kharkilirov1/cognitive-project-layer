@@ -3,6 +3,7 @@ pub mod background;
 pub mod budget;
 pub mod chunk;
 pub mod confidence;
+pub mod dashboard;
 pub mod doctor;
 pub mod embedding;
 pub mod graph;
