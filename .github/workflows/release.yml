@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            archive: tar.gz
+          - os: windows-latest
+            target: windows-x86_64
+            archive: zip
+          - os: macos-15-intel
+            target: macos-x86_64
+            archive: tar.gz
+          - os: macos-15
+            target: macos-aarch64
+            archive: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --bins
+
+      - name: Package Unix binaries
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="cognitive-project-layer-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/${package}"
+          cp target/release/cpl "dist/${package}/"
+          cp target/release/cpl-mcp "dist/${package}/"
+          cp README.md LICENSE NOTICE CHANGELOG.md "dist/${package}/"
+          tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+
+      - name: Package Windows binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = "cognitive-project-layer-${env:GITHUB_REF_NAME}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force "dist/$package" | Out-Null
+          Copy-Item target/release/cpl.exe "dist/$package/"
+          Copy-Item target/release/cpl-mcp.exe "dist/$package/"
+          Copy-Item README.md,LICENSE,NOTICE,CHANGELOG.md "dist/$package/"
+          Compress-Archive -Path "dist/$package/*" -DestinationPath "dist/$package.zip" -Force
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find dist -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+          cd release
+          sha256sum * > SHA256SUMS
+          ls -lh
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" release/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Cognitive Project Layer ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag

@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
-## 0.1.0 - Unreleased
+## 0.1.1 - 2026-05-03
+
+### Added
+
+- Fixture-based retrieval evals for Rust, TypeScript, and ArkTS/HarmonyOS.
+- CLI benchmark runner with JSON output and GitHub Actions artifacts.
+- MCP warm benchmark runner for the long-lived agent path.
+- Dedicated scheduled benchmark workflow.
+- Release workflow for multi-platform binary archives and SHA256 checksums.
+
+### Changed
+
+- Ignore `.playwright-mcp/` browser artifacts in scanner/tooling paths.
+- Document eval and benchmark workflows.
+
+## 0.1.0 - 2026-05-03
 
 ### Added
 
@@ -20,4 +35,3 @@ semantic versioning once stable releases begin.
 - File watcher and background refresh worker.
 - `cpl init` for OpenCode/MCP config generation.
 - ArkTS/HarmonyOS support profile through ignores, entry/config detection, and parser fallback.
-

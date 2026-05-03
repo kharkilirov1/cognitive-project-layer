@@ -43,6 +43,27 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Fixture-based retrieval evals and CLI latency benchmarks.
 - Optional ArkTS/HarmonyOS profile; see [`docs/PROFILES.md`](docs/PROFILES.md).
 
+## Install prebuilt binaries
+
+Download the latest archive for your OS from
+[`releases/latest`](https://github.com/kharkilirov1/cognitive-project-layer/releases/latest):
+
+- `linux-x86_64`
+- `windows-x86_64`
+- `macos-x86_64`
+- `macos-aarch64`
+
+Each release also includes `SHA256SUMS`. The archives contain:
+
+- `cpl`
+- `cpl-mcp`
+- `README.md`
+- `LICENSE`
+- `NOTICE`
+- `CHANGELOG.md`
+
+Put `cpl` and `cpl-mcp` on your `PATH`, or run them from the extracted folder.
+
 ## Install from source
 
 Requirements:
