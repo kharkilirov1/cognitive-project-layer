@@ -27,15 +27,15 @@ parser.add_argument("--root", default=os.getcwd())
 ARGS = parser.parse_args()
 ROOT = Path(ARGS.root).resolve()
 CPL_HOME = Path(__file__).resolve().parents[1]
-CPL_EXE = CPL_HOME / "target" / "debug" / "cpl.exe"
 CPL_MANIFEST = CPL_HOME / "Cargo.toml"
 
 app = Server("cognitive-project-layer")
 
 
 def run_cpl(args: list[str], timeout: int = 120) -> str:
-    if CPL_EXE.exists():
-        command = [str(CPL_EXE), "--root", str(ROOT), *args]
+    cpl_exe = resolve_cpl_exe()
+    if cpl_exe:
+        command = [str(cpl_exe), "--root", str(ROOT), *args]
     else:
         command = [
             "cargo",
@@ -62,6 +62,19 @@ def run_cpl(args: list[str], timeout: int = 120) -> str:
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout).strip())
     return result.stdout.strip()
+
+
+def resolve_cpl_exe() -> Path | None:
+    exe_name = "cpl.exe" if os.name == "nt" else "cpl"
+    for candidate in [
+        CPL_HOME / ".cpl" / "bin" / exe_name,
+        Path.home() / ".cpl" / "bin" / exe_name,
+        CPL_HOME / "target" / "release" / exe_name,
+        CPL_HOME / "target" / "debug" / exe_name,
+    ]:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def text(value: str) -> list[TextContent]:
@@ -144,6 +157,26 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="cpl_index_build",
+            description="Build persistent structural SQLite index under .cpl/index.sqlite.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="cpl_index_db",
+            description="Show persistent structural SQLite index summary.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="cpl_index_freshness",
+            description="Check whether the persistent SQLite index is fresh.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="cpl_doctor",
+            description="Diagnose CPL binaries, MCP config, SQLite index, vector DB, and Ollama.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="cpl_panel",
             description="Render CPL transparency/status panel.",
             inputSchema={
@@ -214,6 +247,14 @@ async def call_tool(name: str, arguments: dict[str, Any] | None):
                     timeout=600,
                 )
             )
+        if name == "cpl_index_build":
+            return text(run_cpl(["index-build"], timeout=600))
+        if name == "cpl_index_db":
+            return text(run_cpl(["index-db"]))
+        if name == "cpl_index_freshness":
+            return text(run_cpl(["index-freshness"]))
+        if name == "cpl_doctor":
+            return text(run_cpl(["doctor"], timeout=180))
         if name == "cpl_panel":
             command = ["panel"]
             if args.get("query"):

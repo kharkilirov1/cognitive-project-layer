@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,12 +8,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::chunk::RichChunk;
+use crate::chunk::{ChunkType, RichChunk};
 use crate::embedding::text_hash;
-use crate::graph::ProjectGraph;
-use crate::references::ReferenceIndex;
+use crate::graph::{GraphEdge, GraphEdgeKind, GraphNode, GraphNodeKind, ProjectGraph};
+use crate::references::{ReferenceIndex, ReferenceKind, ReferenceLocation};
 use crate::scanner::{ProjectScan, detect_language, is_config_file, is_entry_candidate};
-use crate::symbols::SymbolIndex;
+use crate::symbols::{SymbolIndex, SymbolKind, SymbolLocation, Visibility};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -29,6 +29,60 @@ pub struct PersistentIndexSummary {
     pub chunks: usize,
     pub graph_nodes: usize,
     pub graph_edges: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistentIndexFreshness {
+    pub path: PathBuf,
+    pub exists: bool,
+    pub fresh: bool,
+    pub schema_version: Option<u32>,
+    pub reason: String,
+    pub current_files: usize,
+    pub indexed_files: usize,
+    pub changed_files: Vec<PersistentIndexFileChange>,
+    pub missing_files: Vec<PathBuf>,
+    pub extra_files: Vec<PathBuf>,
+}
+
+impl PersistentIndexFreshness {
+    pub fn render_human(&self) -> String {
+        let mut out = String::new();
+        out.push_str("Persistent SQLite index freshness\n");
+        out.push_str(&format!("Path: {}\n", self.path.display()));
+        out.push_str(&format!("Exists: {}\n", self.exists));
+        out.push_str(&format!("Fresh: {}\n", self.fresh));
+        out.push_str(&format!(
+            "Schema: {}\n",
+            self.schema_version
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ));
+        out.push_str(&format!("Reason: {}\n", self.reason));
+        out.push_str(&format!(
+            "Files: current={} indexed={}\n",
+            self.current_files, self.indexed_files
+        ));
+        append_change_paths(&mut out, "Changed files", &self.changed_files, 10);
+        append_paths(&mut out, "Missing from index", &self.missing_files, 10);
+        append_paths(&mut out, "Extra in index", &self.extra_files, 10);
+        out
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistentIndexFileChange {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistentIndexSnapshot {
+    pub summary: PersistentIndexSummary,
+    pub symbols: SymbolIndex,
+    pub references: ReferenceIndex,
+    pub graph: ProjectGraph,
+    pub chunks: Vec<RichChunk>,
 }
 
 impl PersistentIndexSummary {
@@ -282,6 +336,161 @@ impl PersistentIndex {
             graph_edges: count_table(&conn, "graph_edges")?,
         })
     }
+
+    pub fn freshness_default(root: &Path, scan: &ProjectScan) -> Result<PersistentIndexFreshness> {
+        Self::freshness(&Self::default_path(root), root, scan)
+    }
+
+    pub fn freshness(
+        path: &Path,
+        root: &Path,
+        scan: &ProjectScan,
+    ) -> Result<PersistentIndexFreshness> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let current_files = current_indexed_files(&root, scan)?;
+        if !path.exists() {
+            return Ok(PersistentIndexFreshness {
+                path: path.to_path_buf(),
+                exists: false,
+                fresh: false,
+                schema_version: None,
+                reason: "index file does not exist".to_string(),
+                current_files: current_files.len(),
+                indexed_files: 0,
+                changed_files: Vec::new(),
+                missing_files: current_files.keys().cloned().collect(),
+                extra_files: Vec::new(),
+            });
+        }
+
+        let conn = Connection::open(path)
+            .with_context(|| format!("failed to open SQLite index {}", path.display()))?;
+        let schema_version =
+            meta_value(&conn, "schema_version")?.and_then(|value| value.parse::<u32>().ok());
+        if schema_version != Some(SCHEMA_VERSION) {
+            return Ok(PersistentIndexFreshness {
+                path: path.to_path_buf(),
+                exists: true,
+                fresh: false,
+                schema_version,
+                reason: format!(
+                    "schema mismatch: expected {}, got {}",
+                    SCHEMA_VERSION,
+                    schema_version
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string())
+                ),
+                current_files: current_files.len(),
+                indexed_files: count_table(&conn, "files").unwrap_or_default(),
+                changed_files: Vec::new(),
+                missing_files: Vec::new(),
+                extra_files: Vec::new(),
+            });
+        }
+
+        let indexed_files = load_indexed_file_metadata(&conn)?;
+        let mut changed_files = Vec::new();
+        let mut missing_files = Vec::new();
+        let mut extra_files = Vec::new();
+
+        for (rel, current) in &current_files {
+            let Some(indexed) = indexed_files.get(rel) else {
+                missing_files.push(rel.clone());
+                continue;
+            };
+            if current.size_bytes != indexed.size_bytes {
+                changed_files.push(PersistentIndexFileChange {
+                    path: rel.clone(),
+                    reason: format!(
+                        "size changed: {} -> {}",
+                        indexed.size_bytes, current.size_bytes
+                    ),
+                });
+                continue;
+            }
+            if current.modified_unix != indexed.modified_unix {
+                let sha256 = sha256_file(&root.join(rel))
+                    .with_context(|| format!("failed to hash {}", root.join(rel).display()))?;
+                if Some(sha256) != indexed.sha256 {
+                    changed_files.push(PersistentIndexFileChange {
+                        path: rel.clone(),
+                        reason: "modified time and content hash changed".to_string(),
+                    });
+                }
+            }
+        }
+
+        for rel in indexed_files.keys() {
+            if !current_files.contains_key(rel) {
+                extra_files.push(rel.clone());
+            }
+        }
+
+        let fresh = changed_files.is_empty() && missing_files.is_empty() && extra_files.is_empty();
+        let reason = if fresh {
+            "index is fresh".to_string()
+        } else {
+            format!(
+                "changed={}, missing={}, extra={}",
+                changed_files.len(),
+                missing_files.len(),
+                extra_files.len()
+            )
+        };
+
+        Ok(PersistentIndexFreshness {
+            path: path.to_path_buf(),
+            exists: true,
+            fresh,
+            schema_version,
+            reason,
+            current_files: current_files.len(),
+            indexed_files: indexed_files.len(),
+            changed_files,
+            missing_files,
+            extra_files,
+        })
+    }
+
+    pub fn load_snapshot_default(
+        root: &Path,
+        scan: &ProjectScan,
+    ) -> Result<Option<PersistentIndexSnapshot>> {
+        let path = Self::default_path(root);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let freshness = Self::freshness(&path, root, scan)?;
+        if !freshness.fresh {
+            return Ok(None);
+        }
+        Self::load_snapshot(&path, root).map(Some)
+    }
+
+    pub fn load_snapshot(path: &Path, root: &Path) -> Result<PersistentIndexSnapshot> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let conn = Connection::open(path)
+            .with_context(|| format!("failed to open SQLite index {}", path.display()))?;
+        let summary = Self::summary(path)?;
+        if summary.schema_version != SCHEMA_VERSION {
+            anyhow::bail!(
+                "unsupported SQLite index schema {}; expected {}",
+                summary.schema_version,
+                SCHEMA_VERSION
+            );
+        }
+        let symbols = load_symbols(&conn, &root)?;
+        let references = load_references(&conn)?;
+        let graph = load_graph(&conn)?;
+        let chunks = load_chunks(&conn)?;
+        Ok(PersistentIndexSnapshot {
+            summary,
+            symbols,
+            references,
+            graph,
+            chunks,
+        })
+    }
 }
 
 fn create_schema(conn: &Connection) -> Result<()> {
@@ -357,6 +566,202 @@ fn create_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_id);",
     )?;
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct FileMetadata {
+    size_bytes: u64,
+    modified_unix: Option<u64>,
+    sha256: Option<String>,
+}
+
+fn current_indexed_files(
+    root: &Path,
+    scan: &ProjectScan,
+) -> Result<BTreeMap<PathBuf, FileMetadata>> {
+    let mut files = BTreeMap::new();
+    for rel in indexed_file_paths(root, scan) {
+        let abs = root.join(&rel);
+        if !abs.is_file() {
+            continue;
+        }
+        let metadata =
+            fs::metadata(&abs).with_context(|| format!("failed to stat {}", abs.display()))?;
+        files.insert(
+            rel,
+            FileMetadata {
+                size_bytes: metadata.len(),
+                modified_unix: modified_unix(&metadata),
+                sha256: None,
+            },
+        );
+    }
+    Ok(files)
+}
+
+fn load_indexed_file_metadata(conn: &Connection) -> Result<BTreeMap<PathBuf, FileMetadata>> {
+    let mut stmt =
+        conn.prepare("SELECT path, size_bytes, modified_unix, sha256 FROM files ORDER BY path")?;
+    let rows = stmt.query_map([], |row| {
+        let path: String = row.get(0)?;
+        let size_bytes: i64 = row.get(1)?;
+        let modified_unix: Option<i64> = row.get(2)?;
+        let sha256: String = row.get(3)?;
+        Ok((
+            PathBuf::from(path),
+            FileMetadata {
+                size_bytes: size_bytes as u64,
+                modified_unix: modified_unix.map(|value| value as u64),
+                sha256: Some(sha256),
+            },
+        ))
+    })?;
+
+    let mut out = BTreeMap::new();
+    for row in rows {
+        let (path, metadata) = row?;
+        out.insert(path, metadata);
+    }
+    Ok(out)
+}
+
+fn load_symbols(conn: &Connection, root: &Path) -> Result<SymbolIndex> {
+    let mut stmt = conn.prepare(
+        "SELECT file_path, name, kind, line_start, line_end, signature, visibility
+         FROM symbols
+         ORDER BY file_path, line_start, name",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let file_path: String = row.get(0)?;
+        let kind: String = row.get(2)?;
+        let visibility: String = row.get(6)?;
+        Ok(SymbolLocation {
+            path: root.join(file_path),
+            name: row.get(1)?,
+            kind: parse_symbol_kind(&kind),
+            line_start: row.get::<_, i64>(3)? as usize,
+            line_end: row.get::<_, i64>(4)? as usize,
+            signature: row.get(5)?,
+            visibility: parse_visibility(&visibility),
+        })
+    })?;
+
+    let mut symbols = Vec::new();
+    for row in rows {
+        symbols.push(row?);
+    }
+    let by_name = symbol_map(&symbols);
+    Ok(SymbolIndex { symbols, by_name })
+}
+
+fn load_references(conn: &Connection) -> Result<ReferenceIndex> {
+    let mut stmt = conn.prepare(
+        "SELECT file_path, symbol_name, line_number, column_start, kind, snippet
+         FROM references_idx
+         ORDER BY symbol_name, file_path, line_number, column_start",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let kind: String = row.get(4)?;
+        Ok(ReferenceLocation {
+            path: PathBuf::from(row.get::<_, String>(0)?),
+            symbol_name: row.get(1)?,
+            line_number: row.get::<_, i64>(2)? as usize,
+            column_start: row.get::<_, i64>(3)? as usize,
+            kind: parse_reference_kind(&kind),
+            snippet: row.get(5)?,
+        })
+    })?;
+
+    let mut by_symbol = BTreeMap::<String, Vec<ReferenceLocation>>::new();
+    for row in rows {
+        let reference = row?;
+        by_symbol
+            .entry(reference.symbol_name.clone())
+            .or_default()
+            .push(reference);
+    }
+    Ok(ReferenceIndex { by_symbol })
+}
+
+fn load_graph(conn: &Connection) -> Result<ProjectGraph> {
+    let mut node_stmt =
+        conn.prepare("SELECT id, kind, label, path FROM graph_nodes ORDER BY id")?;
+    let node_rows = node_stmt.query_map([], |row| {
+        let kind: String = row.get(1)?;
+        let path: Option<String> = row.get(3)?;
+        Ok(GraphNode {
+            id: row.get(0)?,
+            kind: parse_graph_node_kind(&kind),
+            label: row.get(2)?,
+            path: path.map(PathBuf::from),
+        })
+    })?;
+    let mut nodes = Vec::new();
+    let mut file_nodes = BTreeMap::new();
+    for row in node_rows {
+        let node = row?;
+        if node.kind == GraphNodeKind::File
+            && let Some(path) = node.path.as_ref()
+        {
+            file_nodes.insert(path.clone(), node.id.clone());
+        }
+        nodes.push(node);
+    }
+
+    let mut edge_stmt =
+        conn.prepare("SELECT from_id, to_id, kind, evidence FROM graph_edges ORDER BY id")?;
+    let edge_rows = edge_stmt.query_map([], |row| {
+        let kind: String = row.get(2)?;
+        Ok(GraphEdge {
+            from: row.get(0)?,
+            to: row.get(1)?,
+            kind: parse_graph_edge_kind(&kind),
+            evidence: row.get(3)?,
+        })
+    })?;
+    let mut edges = Vec::new();
+    for row in edge_rows {
+        edges.push(row?);
+    }
+
+    Ok(ProjectGraph {
+        nodes,
+        edges,
+        file_nodes,
+    })
+}
+
+fn load_chunks(conn: &Connection) -> Result<Vec<RichChunk>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, file_path, line_start, line_end, chunk_type, signature, source, docs,
+                symbols_json, imports_json, module_path_json
+         FROM chunks
+         ORDER BY file_path, line_start, id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let chunk_type: String = row.get(4)?;
+        let symbols_json: String = row.get(8)?;
+        let imports_json: String = row.get(9)?;
+        let module_path_json: String = row.get(10)?;
+        Ok(RichChunk {
+            id: row.get(0)?,
+            path: PathBuf::from(row.get::<_, String>(1)?),
+            line_start: row.get::<_, i64>(2)? as usize,
+            line_end: row.get::<_, i64>(3)? as usize,
+            chunk_type: parse_chunk_type(&chunk_type),
+            signature: row.get(5)?,
+            source: row.get(6)?,
+            docs: row.get(7)?,
+            symbols: serde_json::from_str(&symbols_json).unwrap_or_default(),
+            imports: serde_json::from_str(&imports_json).unwrap_or_default(),
+            module_path: serde_json::from_str(&module_path_json).unwrap_or_default(),
+        })
+    })?;
+    let mut chunks = Vec::new();
+    for row in rows {
+        chunks.push(row?);
+    }
+    Ok(chunks)
 }
 
 fn clear_tables(conn: &Connection) -> Result<()> {
@@ -449,6 +854,124 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+fn symbol_map(symbols: &[SymbolLocation]) -> BTreeMap<String, Vec<usize>> {
+    let mut by_name = BTreeMap::<String, Vec<usize>>::new();
+    for (idx, symbol) in symbols.iter().enumerate() {
+        by_name.entry(symbol.name.clone()).or_default().push(idx);
+    }
+    by_name
+}
+
+fn parse_symbol_kind(value: &str) -> SymbolKind {
+    match value {
+        "Function" => SymbolKind::Function,
+        "Method" => SymbolKind::Method,
+        "Class" => SymbolKind::Class,
+        "Struct" => SymbolKind::Struct,
+        "Enum" => SymbolKind::Enum,
+        "Interface" => SymbolKind::Interface,
+        "Component" => SymbolKind::Component,
+        "Export" => SymbolKind::Export,
+        "Const" => SymbolKind::Const,
+        "TypeAlias" => SymbolKind::TypeAlias,
+        "Trait" => SymbolKind::Trait,
+        _ => SymbolKind::Unknown,
+    }
+}
+
+fn parse_visibility(value: &str) -> Visibility {
+    match value {
+        "Public" => Visibility::Public,
+        "Internal" => Visibility::Internal,
+        _ => Visibility::Unknown,
+    }
+}
+
+fn parse_reference_kind(value: &str) -> ReferenceKind {
+    match value {
+        "Call" => ReferenceKind::Call,
+        "ComponentUse" => ReferenceKind::ComponentUse,
+        _ => ReferenceKind::Identifier,
+    }
+}
+
+fn parse_graph_node_kind(value: &str) -> GraphNodeKind {
+    match value {
+        "File" => GraphNodeKind::File,
+        "Symbol" => GraphNodeKind::Symbol,
+        "Module" => GraphNodeKind::Module,
+        _ => GraphNodeKind::Config,
+    }
+}
+
+fn parse_graph_edge_kind(value: &str) -> GraphEdgeKind {
+    match value {
+        "Imports" => GraphEdgeKind::Imports,
+        "Exports" => GraphEdgeKind::Exports,
+        "Calls" => GraphEdgeKind::Calls,
+        "UsesComponent" => GraphEdgeKind::UsesComponent,
+        "Tests" => GraphEdgeKind::Tests,
+        "Configures" => GraphEdgeKind::Configures,
+        "NativeBinding" => GraphEdgeKind::NativeBinding,
+        "Contains" => GraphEdgeKind::Contains,
+        _ => GraphEdgeKind::InModule,
+    }
+}
+
+fn parse_chunk_type(value: &str) -> ChunkType {
+    match value {
+        "Function" => ChunkType::Function,
+        "Class" => ChunkType::Class,
+        "Struct" => ChunkType::Struct,
+        "Enum" => ChunkType::Enum,
+        "Interface" => ChunkType::Interface,
+        "Component" => ChunkType::Component,
+        "Config" => ChunkType::Config,
+        "Test" => ChunkType::Test,
+        "Route" => ChunkType::Route,
+        "NativeBinding" => ChunkType::NativeBinding,
+        "Module" => ChunkType::Module,
+        _ => ChunkType::Unknown,
+    }
+}
+
+fn append_change_paths(
+    out: &mut String,
+    label: &str,
+    changes: &[PersistentIndexFileChange],
+    limit: usize,
+) {
+    out.push_str(&format!("{label}:\n"));
+    if changes.is_empty() {
+        out.push_str("- none\n");
+        return;
+    }
+    for change in changes.iter().take(limit) {
+        out.push_str(&format!(
+            "- {} ({})\n",
+            change.path.display(),
+            change.reason
+        ));
+    }
+    if changes.len() > limit {
+        out.push_str(&format!("- ... {} more\n", changes.len() - limit));
+    }
+}
+
+fn append_paths(out: &mut String, label: &str, paths: &[PathBuf], limit: usize) {
+    out.push_str(&format!("{label}:\n"));
+    if paths.is_empty() {
+        out.push_str("- none\n");
+        return;
+    }
+    for path in paths.iter().take(limit) {
+        out.push_str(&format!("- {}\n", path.display()));
+    }
+    if paths.len() > limit {
+        out.push_str(&format!("- ... {} more\n", paths.len() - limit));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,6 +1017,58 @@ mod tests {
         assert_eq!(loaded.files, summary.files);
         assert_eq!(loaded.symbols, summary.symbols);
         assert_eq!(loaded.chunks, summary.chunks);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn freshness_detects_changed_file_and_snapshot_loads_when_fresh() {
+        let root = temp_project("persistent_index_freshness");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='tmp'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        let file = root.join("src").join("lib.rs");
+        fs::write(&file, "pub fn old_symbol() -> bool { true }\n").unwrap();
+
+        let layer = CognitiveProjectLayer::initialize(&root).unwrap();
+        PersistentIndex::build_default(
+            &layer.root,
+            &layer.scan,
+            &layer.symbols,
+            &layer.references,
+            &layer.graph,
+            &layer.vector_store.chunks,
+        )
+        .unwrap();
+
+        let fresh = PersistentIndex::freshness_default(&layer.root, &layer.scan).unwrap();
+        assert!(fresh.fresh, "{}", fresh.render_human());
+        let snapshot = PersistentIndex::load_snapshot_default(&layer.root, &layer.scan)
+            .unwrap()
+            .unwrap();
+        assert!(!snapshot.symbols.find("old_symbol").is_empty());
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        fs::write(&file, "pub fn new_symbol() -> bool { true }\n").unwrap();
+        let changed_scan = crate::scanner::ProjectScanner::default()
+            .scan(&root)
+            .unwrap();
+        let stale = PersistentIndex::freshness_default(&layer.root, &changed_scan).unwrap();
+        assert!(!stale.fresh);
+        assert!(
+            stale
+                .changed_files
+                .iter()
+                .any(|change| change.path == Path::new("src/lib.rs"))
+        );
+        assert!(
+            PersistentIndex::load_snapshot_default(&layer.root, &changed_scan)
+                .unwrap()
+                .is_none()
+        );
 
         let _ = fs::remove_dir_all(root);
     }

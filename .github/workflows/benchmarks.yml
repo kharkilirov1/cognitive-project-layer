@@ -13,6 +13,7 @@ on:
       - "src/**"
       - "scripts/eval_retrieval.py"
       - "scripts/bench_cli.py"
+      - "scripts/bench_large_repo.py"
       - "evals/**"
 
 jobs:
@@ -56,6 +57,16 @@ jobs:
           --warmup 1
           --json-out .cpl/eval-results/mcp-bench.json
 
+      - name: Run large synthetic benchmark
+        run: >
+          python scripts/bench_large_repo.py
+          --cpl ./target/release/cpl
+          --files 1000
+          --symbols-per-file 3
+          --iterations 3
+          --warmup 1
+          --json-out .cpl/eval-results/large-bench.json
+
       - name: Write run summary
         if: always()
         shell: python
@@ -68,6 +79,7 @@ jobs:
           eval_path = Path(".cpl/eval-results/retrieval.json")
           bench_path = Path(".cpl/eval-results/bench.json")
           mcp_bench_path = Path(".cpl/eval-results/mcp-bench.json")
+          large_bench_path = Path(".cpl/eval-results/large-bench.json")
 
           with summary_path.open("a", encoding="utf-8") as out:
               out.write("# CPL evals and benchmarks\n\n")
@@ -112,6 +124,24 @@ jobs:
                   out.write("\n")
               else:
                   out.write("## MCP benchmark\n\nNo MCP benchmark artifact was produced.\n")
+
+              if large_bench_path.exists():
+                  data = json.loads(large_bench_path.read_text(encoding="utf-8"))
+                  out.write("## Large synthetic benchmark\n\n")
+                  out.write(
+                      f"- Files: `{data['files']}`\n"
+                      f"- Symbols per file: `{data['symbols_per_file']}`\n\n"
+                  )
+                  out.write("| operation | p50 ms | p95 ms |\n")
+                  out.write("| --- | ---: | ---: |\n")
+                  for record in data["records"]:
+                      out.write(
+                          f"| {record['operation']} | "
+                          f"{record['p50_ms']:.1f} | {record['p95_ms']:.1f} |\n"
+                      )
+                  out.write("\n")
+              else:
+                  out.write("## Large synthetic benchmark\n\nNo large benchmark artifact was produced.\n")
 
       - name: Upload eval and benchmark artifacts
         if: always()

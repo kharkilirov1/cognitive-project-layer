@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::CognitiveProjectLayer;
 use crate::budget::ContextBudgetManager;
+use crate::doctor;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
 use crate::persistent_index::PersistentIndex;
 use crate::persistent_vector::{PersistentVectorDb, build_and_save_default};
@@ -107,7 +108,9 @@ fn route_request(
                 "/embed-search?query=...",
                 "/embeddings/rebuild",
                 "/index-db",
+                "/index/freshness",
                 "/index/rebuild",
+                "/doctor",
                 "/tree?depth=3",
                 "/grep?pattern=..."
             ]
@@ -235,6 +238,17 @@ fn route_request(
                 .context("persistent SQLite index not found; call /index/rebuild first")?;
             let text = summary.render_human();
             Ok(json!({ "summary": summary, "text": text }))
+        }
+        ("GET", "/index/freshness") => {
+            let scan = ProjectScanner::default().scan(root)?;
+            let freshness = PersistentIndex::freshness_default(root, &scan)?;
+            let text = freshness.render_human();
+            Ok(json!({ "freshness": freshness, "text": text }))
+        }
+        ("GET", "/doctor") => {
+            let report = doctor::run(root)?;
+            let text = report.render_human();
+            Ok(json!({ "report": report, "text": text }))
         }
         ("GET", "/tree") => {
             let depth = input_usize(&request, "depth").unwrap_or(3);

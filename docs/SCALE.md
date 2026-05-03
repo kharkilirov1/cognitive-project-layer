@@ -79,6 +79,8 @@ Build or inspect the structural index:
 ```bash
 cpl index-build --root .
 cpl index-db --root .
+cpl index-freshness --root .
+cpl doctor --root .
 ```
 
 HTTP/MCP equivalents:
@@ -86,15 +88,18 @@ HTTP/MCP equivalents:
 ```text
 POST /index/rebuild
 GET  /index-db
+GET  /index/freshness
 cpl_index_build
 cpl_index_db
+cpl_index_freshness
 ```
 
 ## Next scale milestone
 
-The next major performance step is using the persisted index as the warm-start
-source for large repositories:
+Fresh SQLite indexes are now used as the warm-start source for symbols,
+references, graph, and chunks. The next scale milestone is finer-grained
+incremental persistence:
 
 - changed-file incremental refresh against the SQLite cache;
-- warm startup from disk;
-- large synthetic benchmark fixture and regression thresholds.
+- regression thresholds for the large synthetic benchmark;
+- optional persisted lexical/vector cache for even faster warm retrieval.

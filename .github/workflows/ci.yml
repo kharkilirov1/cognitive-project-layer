@@ -42,7 +42,7 @@ jobs:
           cargo run --quiet --bin cpl -- --root . index-db --json
 
       - name: Python script syntax
-        run: python -m py_compile scripts/eval_retrieval.py scripts/bench_cli.py scripts/bench_mcp.py
+        run: python -m py_compile scripts/eval_retrieval.py scripts/bench_cli.py scripts/bench_mcp.py scripts/bench_large_repo.py
 
       - name: Retrieval eval
         run: python scripts/eval_retrieval.py --top-k 3
@@ -52,3 +52,6 @@ jobs:
 
       - name: MCP benchmark smoke
         run: python scripts/bench_mcp.py --iterations 1 --warmup 0
+
+      - name: Large synthetic benchmark smoke
+        run: python scripts/bench_large_repo.py --files 120 --symbols-per-file 2 --iterations 1 --warmup 0

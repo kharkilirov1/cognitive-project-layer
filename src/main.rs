@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cognitive_project_layer::CognitiveProjectLayer;
 use cognitive_project_layer::budget::ContextBudgetManager;
+use cognitive_project_layer::doctor;
 use cognitive_project_layer::embedding::{EmbeddingClient, EmbeddingConfig};
 use cognitive_project_layer::persistent_index::PersistentIndex;
 use cognitive_project_layer::persistent_vector::{PersistentVectorDb, build_and_save_default};
@@ -87,6 +88,16 @@ enum Command {
     },
     /// Show persistent structural SQLite index summary.
     IndexDb {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check whether .cpl/index.sqlite is fresh for the current project files.
+    IndexFreshness {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Diagnose CPL binaries, MCP config, SQLite index, vector DB, and Ollama.
+    Doctor {
         #[arg(long)]
         json: bool,
     },
@@ -338,6 +349,24 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             } else {
                 println!("{}", summary.render_human());
+            }
+        }
+        Command::IndexFreshness { json } => {
+            let root = cli.root.canonicalize()?;
+            let scan = ProjectScanner::default().scan(&root)?;
+            let freshness = PersistentIndex::freshness_default(&root, &scan)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&freshness)?);
+            } else {
+                println!("{}", freshness.render_human());
+            }
+        }
+        Command::Doctor { json } => {
+            let report = doctor::run(&cli.root)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", report.render_human());
             }
         }
         Command::Graph { json } => {

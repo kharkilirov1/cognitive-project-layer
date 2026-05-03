@@ -3,6 +3,7 @@ pub mod background;
 pub mod budget;
 pub mod chunk;
 pub mod confidence;
+pub mod doctor;
 pub mod embedding;
 pub mod graph;
 pub mod http_server;
@@ -30,6 +31,7 @@ use chunk::{RichChunk, chunk_file};
 use graph::ProjectGraph;
 use indexer::LazyIndexer;
 use memory::WorkingMemory;
+use persistent_index::PersistentIndex;
 use persistent_vector::PersistentVectorDb;
 use references::ReferenceIndex;
 use retrieval::{HybridRetriever, RetrievalResult, RetrieverResources};
@@ -61,11 +63,22 @@ impl CognitiveProjectLayer {
         let root = normalize_root(root.as_ref())?;
         let scanner = ProjectScanner::default();
         let scan = scanner.scan(&root)?;
-        let symbols = SymbolIndex::build(&scan.source_paths)?;
+        let snapshot = PersistentIndex::load_snapshot_default(&root, &scan).unwrap_or_default();
+        let (symbols, graph, references, chunks) = if let Some(snapshot) = snapshot {
+            (
+                snapshot.symbols,
+                snapshot.graph,
+                snapshot.references,
+                snapshot.chunks,
+            )
+        } else {
+            let symbols = SymbolIndex::build(&scan.source_paths)?;
+            let graph = ProjectGraph::build(&root, &scan, &symbols)?;
+            let references = ReferenceIndex::build(&root, &scan, &symbols)?;
+            let chunks = RichChunk::chunk_project(&root, &scan, &symbols)?;
+            (symbols, graph, references, chunks)
+        };
         let skeleton = Skeleton::build(&scan, &symbols);
-        let graph = ProjectGraph::build(&root, &scan, &symbols)?;
-        let references = ReferenceIndex::build(&root, &scan, &symbols)?;
-        let chunks = RichChunk::chunk_project(&root, &scan, &symbols)?;
         let vector_store = VectorStore::build(chunks);
         let persistent_vector_db = PersistentVectorDb::load_default(&root)?;
         let mut indexer = LazyIndexer::skeleton(&scan);
@@ -253,6 +266,66 @@ mod tests {
             layer.vector_store.search("new name", 1)[0].chunk.path,
             PathBuf::from("src/lib.rs")
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn initialize_uses_sqlite_snapshot_only_when_fresh() {
+        let root = temp_project("initialize_uses_sqlite_snapshot_only_when_fresh");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='tmp'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        let file = src.join("lib.rs");
+        fs::write(&file, "pub fn indexed_name() {}\n").unwrap();
+
+        let layer = CognitiveProjectLayer::initialize(&root).unwrap();
+        crate::persistent_index::PersistentIndex::build_default(
+            &layer.root,
+            &layer.scan,
+            &layer.symbols,
+            &layer.references,
+            &layer.graph,
+            &layer.vector_store.chunks,
+        )
+        .unwrap();
+
+        let warm = CognitiveProjectLayer::initialize(&root).unwrap();
+        assert!(!warm.symbols.find("indexed_name").is_empty());
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        fs::write(&file, "pub fn changed_name() {}\n").unwrap();
+        let refreshed = CognitiveProjectLayer::initialize(&root).unwrap();
+        assert!(refreshed.symbols.find("indexed_name").is_empty());
+        assert!(!refreshed.symbols.find("changed_name").is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn initialize_falls_back_when_sqlite_index_is_unreadable() {
+        let root = temp_project("initialize_falls_back_when_sqlite_index_is_unreadable");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='tmp'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        fs::write(src.join("lib.rs"), "pub fn fallback_symbol() {}\n").unwrap();
+        fs::create_dir_all(root.join(".cpl")).unwrap();
+        fs::write(
+            root.join(".cpl").join("index.sqlite"),
+            "not a sqlite database",
+        )
+        .unwrap();
+
+        let layer = CognitiveProjectLayer::initialize(&root).unwrap();
+        assert!(!layer.symbols.find("fallback_symbol").is_empty());
 
         let _ = fs::remove_dir_all(root);
     }

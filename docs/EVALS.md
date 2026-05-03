@@ -65,6 +65,28 @@ The output separates:
 These scripts are intentionally stdlib-only so they can run in CI or local
 developer environments without installing Python packages.
 
+## Large synthetic benchmark
+
+The large benchmark generates a temporary Rust repository and measures:
+
+- cold scan;
+- cold skeleton before a SQLite index exists;
+- `index-build`;
+- `index-freshness`;
+- warm skeleton after `.cpl/index.sqlite` exists;
+- warm retrieval after `.cpl/index.sqlite` exists.
+
+```powershell
+cargo build --release --bins
+python scripts/bench_large_repo.py --cpl .\target\release\cpl.exe --files 1000 --symbols-per-file 3 --iterations 3 --warmup 1
+```
+
+Optional JSON output:
+
+```powershell
+python scripts/bench_large_repo.py --json-out .cpl\eval-results\large-bench.json
+```
+
 ## GitHub Actions
 
 Regular CI runs a smoke benchmark with one measured iteration to catch broken

@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::budget::ContextBudgetManager;
+use crate::doctor;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
 use crate::persistent_index::PersistentIndex;
 use crate::persistent_vector::build_and_save_default;
@@ -273,6 +274,12 @@ impl McpServer {
                     .context("persistent SQLite index not found; call cpl_index_build first")?;
                 Ok(summary.render_human())
             }
+            "cpl_index_freshness" => {
+                let scan = ProjectScanner::default().scan(&self.root)?;
+                let freshness = PersistentIndex::freshness_default(&self.root, &scan)?;
+                Ok(freshness.render_human())
+            }
+            "cpl_doctor" => Ok(doctor::run(&self.root)?.render_human()),
             "cpl_tree" => {
                 let depth = args
                     .get("depth")
@@ -383,6 +390,16 @@ fn tool_definitions() -> Vec<Value> {
         tool(
             "cpl_index_db",
             "Show persistent structural SQLite index summary.",
+            json!({}),
+        ),
+        tool(
+            "cpl_index_freshness",
+            "Check whether the persistent SQLite index is fresh for current project files.",
+            json!({}),
+        ),
+        tool(
+            "cpl_doctor",
+            "Diagnose CPL binaries, MCP config, SQLite index, vector DB, and Ollama.",
             json!({}),
         ),
         tool(

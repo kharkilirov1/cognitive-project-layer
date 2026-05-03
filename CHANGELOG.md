@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## 0.3.0 - 2026-05-03
+
+### Added
+
+- Warm-start from fresh `.cpl/index.sqlite` snapshots for symbols, references, graph, and chunks.
+- SQLite freshness diagnostics through `cpl index-freshness`, MCP, and HTTP.
+- `cpl doctor` diagnostics for binaries, MCP config, SQLite index, vector DB, and Ollama.
+- Large synthetic repository benchmark script and benchmark workflow artifact.
+
+### Changed
+
+- Python MCP wrapper now prefers installed/local CPL binaries and exposes SQLite/doctor tools.
+
 ## 0.2.0 - 2026-05-03
 
 ### Added

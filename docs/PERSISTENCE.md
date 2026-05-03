@@ -24,6 +24,7 @@ Inspect it:
 
 ```bash
 cpl index-db --root .
+cpl index-freshness --root .
 cpl index-db --root . --json
 ```
 
@@ -32,6 +33,7 @@ MCP tools:
 ```text
 cpl_index_build
 cpl_index_db
+cpl_index_freshness
 ```
 
 HTTP endpoints:
@@ -39,11 +41,13 @@ HTTP endpoints:
 ```text
 POST /index/rebuild
 GET  /index-db
+GET  /index/freshness
 ```
 
-The current implementation rebuilds the SQLite index atomically from the current
-in-memory layer. The next scale milestone is loading unchanged files from this
-index for faster cold starts on very large repositories.
+When the index is fresh, `CognitiveProjectLayer::initialize()` can warm-start
+symbols, references, graph, and chunks from SQLite. If any indexed file is
+changed, missing, extra, or on an unsupported schema, CPL falls back to the full
+scanner/parser path instead of using stale context.
 
 ## Embedding vector DB: `.cpl/vector_db.json`
 

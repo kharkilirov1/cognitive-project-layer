@@ -30,6 +30,8 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Code-aware chunks with stable IDs and inferred line ranges.
 - Local TF-IDF vector search with no network dependency.
 - Persistent structural SQLite index in `.cpl/index.sqlite`.
+- Warm-start from fresh SQLite structural indexes.
+- Index freshness diagnostics and `cpl doctor`.
 - Persistent embedding DB in `.cpl/vector_db.json`.
 - Embedding backends:
   - `local-hash` offline default;
@@ -127,6 +129,7 @@ cargo run -- context --root . --max-tokens 64000 "Why does the build fail around
 cargo run -- panel --root . "architecture retrieval"
 cargo run -- index-build --root .
 cargo run -- index-db --root .
+cargo run -- doctor --root .
 ```
 
 After `cargo install --git`, use the installed binary:
@@ -214,6 +217,8 @@ GET  http://127.0.0.1:3878/embed-search?query=opencode%20mcp&limit=5
 POST http://127.0.0.1:3878/embeddings/rebuild
 POST http://127.0.0.1:3878/index/rebuild
 GET  http://127.0.0.1:3878/index-db
+GET  http://127.0.0.1:3878/index/freshness
+GET  http://127.0.0.1:3878/doctor
 GET  http://127.0.0.1:3878/tree?depth=3
 GET  http://127.0.0.1:3878/grep?pattern=EntryAbility
 ```
@@ -232,6 +237,8 @@ cpl context [--max-tokens N] <query...>
 cpl index
 cpl index-build
 cpl index-db
+cpl index-freshness
+cpl doctor
 cpl graph
 cpl chunks [query]
 cpl embed-index
@@ -284,6 +291,7 @@ src/
   graph.rs           structural project graph
   retrieval.rs       hybrid retrieval pipeline
   confidence.rs      confidence engine
+  doctor.rs          local diagnostics
   tools.rs           fallback tools
   memory.rs          working memory
   budget.rs          context budget manager
@@ -302,6 +310,7 @@ scripts/
   eval_retrieval.py    fixture retrieval eval runner
   bench_cli.py         CLI latency benchmark runner
   bench_mcp.py         MCP stdio warm benchmark runner
+  bench_large_repo.py  synthetic large-repository benchmark
 evals/
   retrieval.json       retrieval eval cases
   fixtures/            small Rust, TypeScript, and ArkTS projects
