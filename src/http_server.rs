@@ -9,17 +9,29 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::CognitiveProjectLayer;
+use crate::budget::ContextBudgetManager;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
 use crate::persistent_vector::{PersistentVectorDb, build_and_save_default};
 use crate::scanner::ProjectScanner;
 use crate::tools::FallbackTools;
 
 pub fn serve_project(root: impl AsRef<Path>, addr: &str) -> Result<()> {
+    serve_project_with_budget(root, addr, ContextBudgetManager::default().max_tokens)
+}
+
+pub fn serve_project_with_budget(
+    root: impl AsRef<Path>,
+    addr: &str,
+    max_tokens: usize,
+) -> Result<()> {
     let root = root.as_ref().canonicalize()?;
     let listener = TcpListener::bind(addr).with_context(|| format!("failed to bind {addr}"))?;
-    let layer = Arc::new(Mutex::new(CognitiveProjectLayer::initialize(&root)?));
+    let layer = Arc::new(Mutex::new(CognitiveProjectLayer::initialize_with_budget(
+        &root, max_tokens,
+    )?));
     eprintln!("Cognitive Project Layer HTTP server");
     eprintln!("Root: {}", root.display());
+    eprintln!("Context max tokens: {max_tokens}");
     eprintln!("Listening: http://{addr}");
 
     for stream in listener.incoming() {
@@ -88,7 +100,7 @@ fn route_request(
                 "/skeleton",
                 "/panel",
                 "/retrieve?query=...",
-                "/context?query=...",
+                "/context?query=...&max_tokens=32000",
                 "/symbols?query=...",
                 "/references?symbol=...",
                 "/embed-search?query=...",
@@ -126,9 +138,20 @@ fn route_request(
         }
         ("GET", "/context") | ("POST", "/context") => {
             let query = required_input(&request, "query")?;
+            let max_tokens = input_usize(&request, "max_tokens");
             with_layer(layer, |layer| {
                 let retrieval = layer.retrieve(&query)?;
-                let context = layer.build_context(&query, &retrieval);
+                let context = if let Some(max_tokens) = max_tokens {
+                    ContextBudgetManager::new(max_tokens).build_context(
+                        &query,
+                        &layer.skeleton,
+                        &layer.memory,
+                        &retrieval.chunks,
+                        &layer.graph,
+                    )
+                } else {
+                    layer.build_context(&query, &retrieval)
+                };
                 Ok(json!({ "context": context }))
             })
         }

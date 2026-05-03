@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cognitive_project_layer::CognitiveProjectLayer;
+use cognitive_project_layer::budget::ContextBudgetManager;
 use cognitive_project_layer::embedding::{EmbeddingClient, EmbeddingConfig};
 use cognitive_project_layer::persistent_vector::{PersistentVectorDb, build_and_save_default};
 use cognitive_project_layer::qdrant::{QdrantConfig, QdrantVectorClient};
@@ -70,6 +71,8 @@ enum Command {
         query: Vec<String>,
         #[arg(long)]
         json: bool,
+        #[arg(long, default_value_t = ContextBudgetManager::default().max_tokens)]
+        max_tokens: usize,
     },
     /// Show lazy indexer state.
     Index {
@@ -153,6 +156,8 @@ enum Command {
         host: String,
         #[arg(long, default_value_t = 3878)]
         port: u16,
+        #[arg(long, default_value_t = ContextBudgetManager::default().max_tokens)]
+        max_tokens: usize,
     },
     /// Render UI transparency panel; optionally include retrieval trace for query.
     Panel { query: Vec<String> },
@@ -260,8 +265,12 @@ fn main() -> Result<()> {
                 println!("{}", result.render_human());
             }
         }
-        Command::Context { query, json } => {
-            let mut layer = CognitiveProjectLayer::initialize(&cli.root)?;
+        Command::Context {
+            query,
+            json,
+            max_tokens,
+        } => {
+            let mut layer = CognitiveProjectLayer::initialize_with_budget(&cli.root, max_tokens)?;
             let query = query.join(" ");
             let result = layer.retrieve(&query)?;
             let context = layer.build_context(&query, &result);
@@ -462,10 +471,15 @@ fn main() -> Result<()> {
                 Duration::from_millis(debounce_ms),
             )?;
         }
-        Command::Serve { host, port } => {
-            cognitive_project_layer::http_server::serve_project(
+        Command::Serve {
+            host,
+            port,
+            max_tokens,
+        } => {
+            cognitive_project_layer::http_server::serve_project_with_budget(
                 &cli.root,
                 &format!("{host}:{port}"),
+                max_tokens,
             )?;
         }
         Command::Panel { query } => {
@@ -873,6 +887,32 @@ mod tests {
 
         assert!(error.to_string().contains("already exists"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn context_command_accepts_max_tokens() {
+        let cli = Cli::parse_from([
+            "cpl",
+            "context",
+            "--max-tokens",
+            "64000",
+            "where",
+            "is",
+            "auth",
+        ]);
+
+        match cli.command {
+            Command::Context {
+                query,
+                json,
+                max_tokens,
+            } => {
+                assert_eq!(query, vec!["where", "is", "auth"]);
+                assert!(!json);
+                assert_eq!(max_tokens, 64_000);
+            }
+            _ => panic!("expected context command"),
+        }
     }
 
     fn temp_project(name: &str) -> PathBuf {

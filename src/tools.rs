@@ -9,7 +9,7 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::scanner::{is_text_candidate, should_ignore_path};
+use crate::scanner::{IgnoreMatcher, is_text_candidate};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrepMatch {
@@ -23,6 +23,7 @@ pub struct FallbackTools;
 impl FallbackTools {
     pub fn file_tree(root: impl AsRef<Path>, max_depth: usize) -> Result<String> {
         let root = root.as_ref().canonicalize()?;
+        let ignore_matcher = IgnoreMatcher::from_root(&root);
         let mut lines = vec![format!("{}/", root.display())];
         let mut seen_dirs = BTreeSet::new();
 
@@ -30,7 +31,7 @@ impl FallbackTools {
             .follow_links(false)
             .max_depth(max_depth + 1)
             .into_iter()
-            .filter_entry(|entry| !should_ignore_path(entry.path()))
+            .filter_entry(|entry| !ignore_matcher.should_ignore(&root, entry.path()))
         {
             let entry = entry?;
             if entry.depth() == 0 {
@@ -38,7 +39,7 @@ impl FallbackTools {
             }
             let path = entry.path();
             let rel = path.strip_prefix(&root).unwrap_or(path);
-            if should_ignore_path(rel) {
+            if ignore_matcher.should_ignore(&root, rel) {
                 continue;
             }
             if entry.file_type().is_dir() && !seen_dirs.insert(rel.to_path_buf()) {
@@ -58,6 +59,7 @@ impl FallbackTools {
 
     pub fn grep(root: impl AsRef<Path>, pattern: &str, limit: usize) -> Result<Vec<GrepMatch>> {
         let root = root.as_ref().canonicalize()?;
+        let ignore_matcher = IgnoreMatcher::from_root(&root);
         let regex = RegexBuilder::new(pattern)
             .case_insensitive(true)
             .build()
@@ -71,14 +73,14 @@ impl FallbackTools {
         for entry in WalkDir::new(&root)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|entry| !should_ignore_path(entry.path()))
+            .filter_entry(|entry| !ignore_matcher.should_ignore(&root, entry.path()))
         {
             let entry = entry?;
             if !entry.file_type().is_file() {
                 continue;
             }
             let path = entry.path();
-            if !is_text_candidate(path) || should_ignore_path(path) {
+            if !is_text_candidate(path) || ignore_matcher.should_ignore(&root, path) {
                 continue;
             }
             let Ok(source) = FileCache::read_to_string(path) else {
@@ -247,6 +249,30 @@ mod tests {
 
         let resolved = validate_path(&root, Path::new("inside.txt")).unwrap();
         assert_eq!(resolved, inside.canonicalize().unwrap());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn grep_respects_cplignore() {
+        let root = temp_dir("grep_respects_cplignore");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("generated")).unwrap();
+        fs::write(root.join(".cplignore"), "generated/\n").unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn real_needle() {}\n").unwrap();
+        fs::write(
+            root.join("generated/noisy.rs"),
+            "pub fn generated_needle() {}\n",
+        )
+        .unwrap();
+
+        let hits = FallbackTools::grep(&root, "needle", 20).unwrap();
+        let paths = hits
+            .iter()
+            .map(|hit| hit.path.to_string_lossy().replace('\\', "/"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, vec!["src/lib.rs"]);
 
         let _ = fs::remove_dir_all(root);
     }

@@ -91,6 +91,16 @@ impl CognitiveProjectLayer {
         })
     }
 
+    pub fn initialize_with_budget(root: impl AsRef<Path>, max_tokens: usize) -> Result<Self> {
+        let mut layer = Self::initialize(root)?;
+        layer.set_context_budget(max_tokens);
+        Ok(layer)
+    }
+
+    pub fn set_context_budget(&mut self, max_tokens: usize) {
+        self.budget = ContextBudgetManager::new(max_tokens);
+    }
+
     pub fn retrieve(&mut self, query: &str) -> Result<RetrievalResult> {
         let result = HybridRetriever::retrieve(
             RetrieverResources {

@@ -22,6 +22,7 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 ## Features
 
 - Fast project scanner with ignored build/cache/vendor folders.
+- Root `.gitignore` and `.cplignore` support for large/generated trees.
 - Always-on `Skeleton` prompt: entry points, modules, configs, public API, recent changes.
 - Tree-sitter-first symbol index for Rust, TypeScript/TSX, JavaScript, Python, C++, Go.
 - Regex fallback for niche/unsupported syntax, including ArkTS/HarmonyOS components.
@@ -120,7 +121,7 @@ cargo run -- scan --root .
 cargo run -- skeleton --root .
 cargo run -- symbols --root . retrieve
 cargo run -- retrieve --root . "Where is retrieve implemented?"
-cargo run -- context --root . "Why does the build fail around hilog?"
+cargo run -- context --root . --max-tokens 64000 "Why does the build fail around hilog?"
 cargo run -- panel --root . "architecture retrieval"
 ```
 
@@ -193,7 +194,7 @@ GET  http://127.0.0.1:3878/health
 GET  http://127.0.0.1:3878/scan
 GET  http://127.0.0.1:3878/skeleton
 GET  http://127.0.0.1:3878/retrieve?query=symbol_lookup
-GET  http://127.0.0.1:3878/context?query=auth%20login
+GET  http://127.0.0.1:3878/context?query=auth%20login&max_tokens=64000
 GET  http://127.0.0.1:3878/symbols?query=retrieve
 GET  http://127.0.0.1:3878/references?symbol=retrieve
 GET  http://127.0.0.1:3878/embed-search?query=opencode%20mcp&limit=5
@@ -212,7 +213,7 @@ cpl scan
 cpl skeleton
 cpl symbols [query]
 cpl retrieve <query...>
-cpl context <query...>
+cpl context [--max-tokens N] <query...>
 cpl index
 cpl graph
 cpl chunks [query]
@@ -288,6 +289,7 @@ evals/
   fixtures/            small Rust, TypeScript, and ArkTS projects
 docs/
   INSTALL.md
+  SCALE.md
   EVALS.md
   PROFILES.md
   OPENCODE.md

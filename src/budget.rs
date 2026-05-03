@@ -6,6 +6,8 @@ use crate::memory::WorkingMemory;
 use crate::retrieval::CandidateChunk;
 use crate::skeleton::Skeleton;
 
+pub const DEFAULT_CONTEXT_MAX_TOKENS: usize = 32_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextBudget {
     pub max_tokens: usize,
@@ -37,7 +39,9 @@ pub struct ContextBudgetManager {
 
 impl Default for ContextBudgetManager {
     fn default() -> Self {
-        Self { max_tokens: 16_000 }
+        Self {
+            max_tokens: DEFAULT_CONTEXT_MAX_TOKENS,
+        }
     }
 }
 
@@ -292,6 +296,15 @@ mod tests {
         let graph = ProjectGraph::default();
         let context = manager.build_context("test", &skeleton, &memory, &[], &graph);
         assert!(context.tokens <= 100);
+    }
+
+    #[test]
+    fn default_budget_is_product_sized() {
+        assert_eq!(
+            ContextBudgetManager::default().max_tokens,
+            DEFAULT_CONTEXT_MAX_TOKENS
+        );
+        assert!(ContextBudgetManager::default().max_tokens >= 32_000);
     }
 
     #[test]

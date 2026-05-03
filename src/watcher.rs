@@ -7,7 +7,7 @@ use anyhow::Result;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
 use crate::CognitiveProjectLayer;
-use crate::scanner::{is_text_candidate, should_ignore_path};
+use crate::scanner::{IgnoreMatcher, is_text_candidate};
 
 pub fn watch_project(root: impl AsRef<Path>, debounce: Duration) -> Result<()> {
     let root = root.as_ref().canonicalize()?;
@@ -23,6 +23,7 @@ pub fn watch_project(root: impl AsRef<Path>, debounce: Duration) -> Result<()> {
     println!("Press Ctrl+C to stop.");
 
     let mut layer = CognitiveProjectLayer::initialize(&root)?;
+    let ignore_matcher = IgnoreMatcher::from_root(&root);
     println!("{}", layer.indexer.render_status());
 
     let mut pending = BTreeSet::<PathBuf>::new();
@@ -33,7 +34,7 @@ pub fn watch_project(root: impl AsRef<Path>, debounce: Duration) -> Result<()> {
             Ok(Ok(event)) => {
                 if is_relevant_event(&event) {
                     for path in event.paths {
-                        if is_relevant_path(&root, &path) {
+                        if is_relevant_path(&root, &path, &ignore_matcher) {
                             pending.insert(path);
                         }
                     }
@@ -88,12 +89,12 @@ fn is_relevant_event(event: &Event) -> bool {
     )
 }
 
-fn is_relevant_path(root: &Path, path: &Path) -> bool {
-    if should_ignore_path(path) {
+fn is_relevant_path(root: &Path, path: &Path, ignore_matcher: &IgnoreMatcher) -> bool {
+    if ignore_matcher.should_ignore(root, path) {
         return false;
     }
     if let Ok(rel) = path.strip_prefix(root)
-        && (should_ignore_path(rel) || rel.starts_with(".cpl"))
+        && (ignore_matcher.should_ignore(root, rel) || rel.starts_with(".cpl"))
     {
         return false;
     }

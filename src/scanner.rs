@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use walkdir::{DirEntry, WalkDir};
+use walkdir::WalkDir;
 
 pub const IGNORED_DIRS: &[&str] = &[
     "node_modules",
@@ -129,6 +130,7 @@ impl Default for ProjectScanner {
 impl ProjectScanner {
     pub fn scan(&self, root: impl AsRef<Path>) -> Result<ProjectScan> {
         let root = root.as_ref().canonicalize()?;
+        let ignore_matcher = IgnoreMatcher::from_root_with_names(&root, self.ignored_names.clone());
         let mut total_files = 0usize;
         let mut source_files = 0usize;
         let mut total_size_bytes = 0u64;
@@ -143,7 +145,7 @@ impl ProjectScanner {
             .follow_links(false)
             .into_iter()
             .filter_entry(|entry| {
-                if should_ignore_entry(entry, &root, &self.ignored_names) {
+                if ignore_matcher.should_ignore(&root, entry.path()) {
                     if entry.depth() > 0 {
                         ignored_dirs.insert(entry.path().to_path_buf());
                     }
@@ -186,7 +188,7 @@ impl ProjectScanner {
         entry_candidates.sort();
         source_paths.sort();
         let languages = language_files.keys().cloned().collect::<Vec<_>>();
-        let recent_changed_files = recent_changed_files(&root);
+        let recent_changed_files = recent_changed_files(&root, &ignore_matcher);
         let git_available = is_git_repo(&root);
         let generated_ratio = generated_ratio(total_files, ignored_dirs.len());
         let estimated_tokens = (total_size_bytes / 4) as usize;
@@ -218,18 +220,71 @@ impl ProjectScanner {
     }
 }
 
-pub fn should_ignore_path(path: &Path) -> bool {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    let normalized_lower = normalized.to_ascii_lowercase();
+#[derive(Debug, Clone)]
+pub struct IgnoreMatcher {
+    ignored_names: BTreeSet<String>,
+    patterns: Vec<IgnorePattern>,
+}
 
-    IGNORED_DIRS.iter().any(|ignored| {
+#[derive(Debug, Clone)]
+struct IgnorePattern {
+    pattern: String,
+    anchored: bool,
+    directory: bool,
+    has_slash: bool,
+}
+
+impl IgnoreMatcher {
+    pub fn from_root(root: &Path) -> Self {
+        Self::from_root_with_names(root, default_ignored_names())
+    }
+
+    fn from_root_with_names(root: &Path, ignored_names: BTreeSet<String>) -> Self {
+        let mut patterns = Vec::new();
+        for file_name in [".gitignore", ".cplignore"] {
+            patterns.extend(load_ignore_patterns(&root.join(file_name)));
+        }
+        Self {
+            ignored_names,
+            patterns,
+        }
+    }
+
+    pub fn should_ignore(&self, root: &Path, path: &Path) -> bool {
+        if path == root {
+            return false;
+        }
+        if should_ignore_entry_path(path, root, &self.ignored_names) {
+            return true;
+        }
+
+        let rel = path.strip_prefix(root).unwrap_or(path);
+        let rel_text = normalize_path_text(rel);
+        if rel_text.is_empty() {
+            return false;
+        }
+        self.patterns
+            .iter()
+            .any(|pattern| pattern.matches(&rel_text))
+    }
+}
+
+pub fn should_ignore_path(path: &Path) -> bool {
+    should_ignore_entry_path(path, Path::new(""), &default_ignored_names())
+}
+
+fn should_ignore_entry_path(path: &Path, root: &Path, ignored_names: &BTreeSet<String>) -> bool {
+    let match_path = path.strip_prefix(root).unwrap_or(path);
+    let normalized_lower = normalize_path_text(match_path);
+
+    ignored_names.iter().any(|ignored| {
         let ignored_norm = ignored.replace('\\', "/").to_ascii_lowercase();
         if ignored_norm.contains('/') {
             normalized_lower == ignored_norm
                 || normalized_lower.ends_with(&format!("/{ignored_norm}"))
                 || normalized_lower.contains(&format!("/{ignored_norm}/"))
         } else {
-            path.components().any(|component| {
+            match_path.components().any(|component| {
                 component
                     .as_os_str()
                     .to_string_lossy()
@@ -237,6 +292,112 @@ pub fn should_ignore_path(path: &Path) -> bool {
             })
         }
     })
+}
+
+fn normalize_path_text(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn load_ignore_patterns(path: &Path) -> Vec<IgnorePattern> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines().filter_map(parse_ignore_pattern).collect()
+}
+
+fn parse_ignore_pattern(line: &str) -> Option<IgnorePattern> {
+    let mut pattern = line.trim();
+    if pattern.is_empty() || pattern.starts_with('#') || pattern.starts_with('!') {
+        return None;
+    }
+    if let Some(stripped) = pattern.strip_prefix("./") {
+        pattern = stripped;
+    }
+    let anchored = pattern.starts_with('/');
+    if anchored {
+        pattern = pattern.trim_start_matches('/');
+    }
+    let directory = pattern.ends_with('/');
+    if directory {
+        pattern = pattern.trim_end_matches('/');
+    }
+    pattern = pattern.trim();
+    if pattern.is_empty() {
+        return None;
+    }
+    let pattern = pattern.replace('\\', "/").to_ascii_lowercase();
+    Some(IgnorePattern {
+        has_slash: pattern.contains('/'),
+        pattern,
+        anchored,
+        directory,
+    })
+}
+
+impl IgnorePattern {
+    fn matches(&self, rel: &str) -> bool {
+        if self.anchored || self.has_slash {
+            return path_pattern_matches(&self.pattern, rel, self.directory);
+        }
+
+        rel.split('/')
+            .any(|component| wildcard_match(&self.pattern, component))
+            || path_pattern_matches(&self.pattern, rel, self.directory)
+    }
+}
+
+fn path_pattern_matches(pattern: &str, rel: &str, directory: bool) -> bool {
+    if wildcard_match(pattern, rel) {
+        return true;
+    }
+    if directory {
+        rel == pattern
+            || rel.starts_with(&format!("{pattern}/"))
+            || rel.contains(&format!("/{pattern}/"))
+    } else {
+        rel == pattern || rel.ends_with(&format!("/{pattern}"))
+    }
+}
+
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == text;
+    }
+
+    let pattern = pattern.as_bytes();
+    let text = text.as_bytes();
+    let (mut p, mut t) = (0usize, 0usize);
+    let mut star = None;
+    let mut match_after_star = 0usize;
+
+    while t < text.len() {
+        if p < pattern.len() && pattern[p] == text[t] {
+            p += 1;
+            t += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            match_after_star = t;
+            p += 1;
+        } else if let Some(star_idx) = star {
+            p = star_idx + 1;
+            match_after_star += 1;
+            t = match_after_star;
+        } else {
+            return false;
+        }
+    }
+
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+fn default_ignored_names() -> BTreeSet<String> {
+    IGNORED_DIRS.iter().map(|item| item.to_string()).collect()
 }
 
 pub fn is_source_file(path: &Path) -> bool {
@@ -335,28 +496,6 @@ pub fn is_entry_candidate(path: &Path, rel: &Path) -> bool {
     )
 }
 
-fn should_ignore_entry(entry: &DirEntry, root: &Path, ignored_names: &BTreeSet<String>) -> bool {
-    if entry.depth() == 0 {
-        return false;
-    }
-    let path = entry.path();
-    let name = entry.file_name().to_string_lossy();
-    if ignored_names
-        .iter()
-        .any(|ignored| ignored.eq_ignore_ascii_case(&name))
-    {
-        return true;
-    }
-    let rel_text = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    ignored_names
-        .iter()
-        .any(|ignored| rel_text == *ignored || rel_text.ends_with(&format!("/{ignored}")))
-}
-
 fn is_git_repo(root: &Path) -> bool {
     Command::new("git")
         .arg("-C")
@@ -368,7 +507,7 @@ fn is_git_repo(root: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn recent_changed_files(root: &Path) -> Vec<PathBuf> {
+fn recent_changed_files(root: &Path, ignore_matcher: &IgnoreMatcher) -> Vec<PathBuf> {
     let mut files = BTreeSet::new();
 
     // git status --porcelain (машиночитаемый формат, не зависит от локали)
@@ -388,7 +527,7 @@ fn recent_changed_files(root: &Path) -> Vec<PathBuf> {
                 let path = path_part.trim().trim_matches('"');
                 // Для renamed: "path -> newpath" — берём последний
                 let path = path.split(" -> ").last().unwrap_or(path);
-                if !path.is_empty() && !should_ignore_path(Path::new(path)) {
+                if !path.is_empty() && !ignore_matcher.should_ignore(root, Path::new(path)) {
                     files.insert(path.to_string());
                 }
             }
@@ -423,7 +562,7 @@ fn recent_changed_files(root: &Path) -> Vec<PathBuf> {
         {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
                 let line = line.trim();
-                if !line.is_empty() {
+                if !line.is_empty() && !ignore_matcher.should_ignore(root, Path::new(line)) {
                     files.insert(line.to_string());
                 }
             }
@@ -502,6 +641,82 @@ mod tests {
         assert!(scan.total_size_bytes < 100_000);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_respects_cplignore_and_gitignore_patterns() {
+        let root = temp_project("scan_respects_ignore_files");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        std::fs::create_dir_all(root.join("ignored-by-git")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn real_api() {}\n").unwrap();
+        std::fs::write(
+            root.join("generated/noisy.rs"),
+            "pub fn generated_api() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("ignored-by-git/hidden.rs"),
+            "pub fn ignored_api() {}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join(".cplignore"), "generated/\n*.snap\n").unwrap();
+        std::fs::write(root.join(".gitignore"), "ignored-by-git/\n").unwrap();
+
+        let scan = ProjectScanner::default().scan(&root).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        let rel_sources = scan
+            .source_paths
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&canonical_root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(rel_sources, vec!["src/lib.rs"]);
+        assert!(
+            scan.ignored_dirs
+                .iter()
+                .any(|path| path.ends_with("generated"))
+        );
+        assert!(
+            scan.ignored_dirs
+                .iter()
+                .any(|path| path.ends_with("ignored-by-git"))
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ignored_parent_directory_names_do_not_hide_project_root() {
+        let root = temp_project("ignored_parent_directory_names")
+            .join("build")
+            .join("actual-project");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn real_api() {}\n").unwrap();
+
+        let scan = ProjectScanner::default().scan(&root).unwrap();
+
+        assert_eq!(scan.source_files, 1);
+        assert_eq!(scan.languages, vec!["Rust"]);
+
+        let cleanup = root
+            .ancestors()
+            .nth(2)
+            .expect("temp root ancestor")
+            .to_path_buf();
+        std::fs::remove_dir_all(cleanup).unwrap();
+    }
+
+    #[test]
+    fn wildcard_ignore_patterns_match_file_names() {
+        let pattern = parse_ignore_pattern("*.snap").unwrap();
+        assert!(pattern.matches("tests/output.snap"));
+        assert!(!pattern.matches("tests/output.rs"));
     }
 
     fn temp_project(name: &str) -> PathBuf {

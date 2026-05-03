@@ -4,21 +4,31 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
+use crate::budget::ContextBudgetManager;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
 use crate::persistent_vector::build_and_save_default;
 use crate::tools::FallbackTools;
 use crate::{CognitiveProjectLayer, scanner::ProjectScanner};
 
 pub fn run_stdio(root: impl AsRef<Path>) -> Result<()> {
+    run_stdio_with_budget(root, ContextBudgetManager::default().max_tokens)
+}
+
+pub fn run_stdio_with_budget(root: impl AsRef<Path>, max_tokens: usize) -> Result<()> {
     let root = root.as_ref().canonicalize()?;
     trace(&format!("start root={}", root.display()));
-    let mut server = McpServer { root, layer: None };
+    let mut server = McpServer {
+        root,
+        layer: None,
+        max_tokens,
+    };
     server.run()
 }
 
 struct McpServer {
     root: PathBuf,
     layer: Option<CognitiveProjectLayer>,
+    max_tokens: usize,
 }
 
 impl McpServer {
@@ -121,7 +131,17 @@ impl McpServer {
                 let query = required_string(&args, "query")?;
                 let layer = self.layer_mut()?;
                 let result = layer.retrieve(&query)?;
-                let context = layer.build_context(&query, &result);
+                let context = if let Some(max_tokens) = optional_usize(&args, "max_tokens") {
+                    ContextBudgetManager::new(max_tokens).build_context(
+                        &query,
+                        &layer.skeleton,
+                        &layer.memory,
+                        &result.chunks,
+                        &layer.graph,
+                    )
+                } else {
+                    layer.build_context(&query, &result)
+                };
                 Ok(format!(
                     "{}\n---\nContext tokens: {}\nSections: {}",
                     context.text,
@@ -262,7 +282,10 @@ impl McpServer {
 
     fn layer_mut(&mut self) -> Result<&mut CognitiveProjectLayer> {
         if self.layer.is_none() {
-            self.layer = Some(CognitiveProjectLayer::initialize(&self.root)?);
+            self.layer = Some(CognitiveProjectLayer::initialize_with_budget(
+                &self.root,
+                self.max_tokens,
+            )?);
         }
         Ok(self.layer.as_mut().expect("layer initialized"))
     }
@@ -293,7 +316,7 @@ fn tool_definitions() -> Vec<Value> {
         tool(
             "cpl_context",
             "Build managed LLM context for a query with skeleton, memory, retrieval and token budget.",
-            schema_query(),
+            schema_context_query(),
         ),
         tool(
             "cpl_symbols",
@@ -368,6 +391,14 @@ fn tool(name: &str, description: &str, properties: Value) -> Value {
 fn schema_query() -> Value {
     json!({
         "query": {"type": "string"},
+    })
+    .with_required(&["query"])
+}
+
+fn schema_context_query() -> Value {
+    json!({
+        "query": {"type": "string"},
+        "max_tokens": {"type": "integer", "minimum": 1},
     })
     .with_required(&["query"])
 }
@@ -460,6 +491,12 @@ fn limit_arg(args: &Value, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+fn optional_usize(args: &Value, name: &str) -> Option<usize> {
+    args.get(name)
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+}
+
 fn embedding_config(
     backend: &str,
     model: Option<String>,
@@ -510,5 +547,14 @@ mod tests {
         let tools = tool_definitions();
         assert!(tools.iter().any(|tool| tool["name"] == "cpl_retrieve"));
         assert!(tools.iter().all(|tool| tool.get("inputSchema").is_some()));
+        let context = tools
+            .iter()
+            .find(|tool| tool["name"] == "cpl_context")
+            .unwrap();
+        assert!(
+            context["inputSchema"]["properties"]
+                .get("max_tokens")
+                .is_some()
+        );
     }
 }

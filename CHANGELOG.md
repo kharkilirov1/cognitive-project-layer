@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## 0.1.3 - 2026-05-03
+
+### Added
+
+- Root `.gitignore` and `.cplignore` support for scanner, grep, tree, and watcher paths.
+- Configurable context token budgets for CLI, MCP, and HTTP context flows.
+- `docs/SCALE.md` with large-repository guidance and current scale limitations.
+
+### Changed
+
+- Default managed-context budget increased from `16_000` to `32_000` estimated tokens.
+
 ## 0.1.2 - 2026-05-03
 
 ### Added
