@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## 0.6.0 - 2026-05-04
+
+### Added
+
+- Lazy metadata-only loading for `.cpl/vectors.sqlite`.
+- DB-backed streaming `embed-search` for SQLite vector DBs, avoiding eager
+  in-process vector loads on warm agent startup.
+- Large synthetic benchmark coverage for lazy SQLite embedding search.
+
+### Changed
+
+- `CognitiveProjectLayer::initialize()` now records persisted embedding counts
+  without loading every dense vector into memory.
+- Qdrant upsert explicitly eager-loads SQLite vector records before export.
+- `cpl vector-db` summaries use SQLite metadata counts for lazy databases.
+
 ## 0.5.0 - 2026-05-04
 
 ### Added

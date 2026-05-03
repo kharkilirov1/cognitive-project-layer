@@ -83,6 +83,11 @@ impl QdrantVectorClient {
     }
 
     pub fn upsert_db(&self, db: &PersistentVectorDb, batch_size: usize) -> Result<usize> {
+        if db.records.is_empty() && db.record_count() > 0 {
+            anyhow::bail!(
+                "persistent vector DB records are not loaded; load it eagerly before Qdrant upsert"
+            );
+        }
         self.ensure_collection(db.dimensions)?;
         let batch_size = batch_size.max(1);
         let mut total = 0usize;

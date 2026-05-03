@@ -80,6 +80,7 @@ The large benchmark generates a temporary Rust repository and measures:
 - warm retrieval after `.cpl/index.sqlite` exists.
 - local-hash `embed-index`;
 - unchanged `embed-refresh`;
+- lazy SQLite `embed-search`;
 - one-file `embed-refresh`.
 
 ```powershell
@@ -101,7 +102,7 @@ python scripts/check_bench_thresholds.py --input .cpl\eval-results\large-bench.j
 
 The gate checks p95 latency for cold scan, cold skeleton, structural index
 build/freshness/refresh/search, warm skeleton/retrieval, and local-hash
-embedding build/refresh. Thresholds can be overridden with repeated
+embedding build/refresh/search. Thresholds can be overridden with repeated
 `--threshold operation:milliseconds` arguments.
 
 ## GitHub Actions

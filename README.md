@@ -34,6 +34,7 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Incremental SQLite index refresh with rebuild fallback.
 - Index freshness diagnostics, MCP auto-refresh, and `cpl doctor`.
 - Persistent embedding DB in `.cpl/vectors.sqlite` with legacy `.cpl/vector_db.json` fallback.
+- Lazy SQLite vector loading with DB-backed streaming `embed-search`.
 - Incremental embedding refresh by changed chunk path.
 - Embedding backends:
   - `local-hash` offline default;

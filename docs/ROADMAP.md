@@ -29,9 +29,9 @@ Status: in progress.
 
 ## 0.2.x — Product quality
 
-- [ ] Release binaries for Windows/Linux/macOS.
-- [ ] Installer or `cargo install` flow documentation.
-- [ ] Retrieval eval suite across public repositories.
+- [x] Release binaries for Windows/Linux/macOS.
+- [x] Installer or `cargo install` flow documentation.
+- [x] Fixture retrieval eval suite.
 - [ ] Golden tests for MCP tool outputs.
 - [ ] Better error messages for embedding provider failures.
 - [ ] Config file for profiles and ignored paths.
@@ -40,14 +40,14 @@ Status: in progress.
 ## 0.3.x — Deeper code intelligence
 
 - [ ] LSP-backed references/usages where available.
-- [ ] Incremental symbol/chunk refresh for persistent embedding DB.
+- [x] Incremental chunk-path refresh for persistent embedding DB.
 - [ ] More language profiles.
 - [ ] Query-specific graph traversal policies.
-- [ ] Optional embedded vector backend beyond JSON persistence.
+- [x] SQLite vector backend beyond JSON persistence.
+- [x] Lazy DB-backed dense-vector search.
 
 ## Later
 
 - [ ] GUI transparency panel.
 - [ ] Multi-repository workspace mode.
 - [ ] Agent evaluation harness for edit success rate, not only retrieval quality.
-

@@ -127,7 +127,7 @@ pub fn run(root: impl AsRef<Path>) -> Result<DoctorReport> {
             status: DoctorStatus::Ok,
             message: format!(
                 "{} records, backend={}, model={}, dimensions={} at {}",
-                db.records.len(),
+                db.record_count(),
                 db.backend,
                 db.model,
                 db.dimensions,

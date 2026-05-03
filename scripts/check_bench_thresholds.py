@@ -21,6 +21,7 @@ DEFAULT_THRESHOLDS_MS = {
     "warm_retrieve_sqlite": 15_000.0,
     "embed_index_local_hash": 30_000.0,
     "embed_refresh_unchanged": 10_000.0,
+    "embed_search_sqlite_lazy": 10_000.0,
     "embed_refresh_one_file": 15_000.0,
 }
 

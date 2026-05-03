@@ -302,7 +302,8 @@ Current public profile:
 
 - No LSP-backed semantic references yet.
 - No GUI transparency panel yet; current panel is text-based.
-- Persistent vector DB refresh is file-local for in-memory TF-IDF and reload-based
-  for dense DB state.
-- JSON persistent vector DB is simple and portable, but not optimized for very
-  large repositories.
+- Persistent vector DB refresh is chunk-path incremental, but embedding model
+  changes still require a full vector rebuild.
+- SQLite vector search streams from the DB, but exact dense scoring is still
+  linear over persisted vectors; approximate ANN is left to Qdrant or a future
+  embedded ANN backend.

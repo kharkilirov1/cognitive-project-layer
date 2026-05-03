@@ -574,7 +574,7 @@ fn main() -> Result<()> {
         } => {
             let layer = CognitiveProjectLayer::initialize(&cli.root)?;
             let db = if let Some(db) = layer.persistent_vector_db.as_ref() {
-                db.clone()
+                db.clone().into_eager()?
             } else {
                 let config = EmbeddingConfig::from_env_or_local();
                 let client = EmbeddingClient::new(config);

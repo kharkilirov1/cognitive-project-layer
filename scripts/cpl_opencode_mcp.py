@@ -332,7 +332,7 @@ async def main() -> None:
             write_stream,
             InitializationOptions(
                 server_name="cognitive-project-layer",
-                server_version="0.5.0",
+                server_version="0.6.0",
                 capabilities=app.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},

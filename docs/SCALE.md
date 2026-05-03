@@ -77,6 +77,8 @@ cpl-mcp --root . --max-tokens 64000
 - SQLite FTS lexical search is persisted inside `.cpl/index.sqlite`.
 - Persistent embeddings exist in `.cpl/vectors.sqlite` with legacy JSON fallback.
 - `embed-refresh` updates vectors only for changed chunk paths when possible.
+- SQLite vector DBs load metadata lazily and stream dense search from the DB, so
+  warm startup does not need to materialize every vector in memory.
 
 Build or inspect the structural index:
 
@@ -110,12 +112,11 @@ cpl_refresh_embeddings
 ## Next scale milestone
 
 Fresh SQLite indexes are now used as the warm-start source for symbols,
-references, graph, chunks, lexical FTS, and embeddings. Changed-file refresh can
-update structural and semantic SQLite caches without rebuilding the entire
-project. The next scale milestone is deeper stress coverage and finer invalidation:
+references, graph, chunks, lexical FTS, and embedding metadata/search. Changed-file
+refresh can update structural and semantic SQLite caches without rebuilding the
+entire project. The next scale milestone is deeper stress coverage and product UI:
 
 - stricter regression thresholds for the large synthetic benchmark;
 - broader stress tests for symbol/reference invalidation across very large
   cross-file edits.
-- optional DB-backed dense-vector search that avoids loading all vectors into
-  process memory.
+- a local dashboard for index health, retrieval traces, and benchmark history.

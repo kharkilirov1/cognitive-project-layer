@@ -217,6 +217,7 @@ def main() -> int:
         records.append(record("warm_retrieve_sqlite", measure(base, ["--root", str(root), "retrieve", "--json", "feature 42 linked"], REPO_ROOT, args.iterations, args.warmup)))
         records.append(record("embed_index_local_hash", measure(base, ["--root", str(root), "embed-index", "--backend", "local-hash", "--dimensions", "256", "--json"], REPO_ROOT, args.iterations, 0)))
         records.append(record("embed_refresh_unchanged", measure(base, ["--root", str(root), "embed-refresh", "--backend", "local-hash", "--dimensions", "256", "--json"], REPO_ROOT, args.iterations, args.warmup)))
+        records.append(record("embed_search_sqlite_lazy", measure(base, ["--root", str(root), "embed-search", "--json", "feature linked", "--limit", "10"], REPO_ROOT, args.iterations, args.warmup)))
         records.append(record("embed_refresh_one_file", measure_with_hook(
             base,
             ["--root", str(root), "embed-refresh", "--backend", "local-hash", "--dimensions", "256", "--json"],

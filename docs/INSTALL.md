@@ -17,7 +17,7 @@ Default install location:
 Install a specific version:
 
 ```powershell
-.\install.ps1 -Version v0.5.0
+.\install.ps1 -Version v0.6.0
 ```
 
 Install without modifying the user `PATH`:
@@ -41,7 +41,7 @@ $HOME/.local/bin
 Install a specific version:
 
 ```bash
-VERSION=v0.5.0 sh install.sh
+VERSION=v0.6.0 sh install.sh
 ```
 
 Install into a custom directory:

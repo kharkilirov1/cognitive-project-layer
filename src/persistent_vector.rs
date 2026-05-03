@@ -20,6 +20,8 @@ pub struct PersistentVectorDb {
     pub dimensions: usize,
     pub root: PathBuf,
     pub created_unix: u64,
+    #[serde(default)]
+    pub records_total: usize,
     pub records: Vec<VectorRecord>,
     #[serde(default)]
     pub storage: String,
@@ -124,6 +126,18 @@ impl PersistentVectorDb {
         Ok(None)
     }
 
+    pub fn load_default_eager(root: &Path) -> Result<Option<Self>> {
+        let sqlite = Self::sqlite_path(root);
+        if sqlite.exists() {
+            return Self::load_sqlite_eager(&sqlite).map(Some);
+        }
+        let json = Self::json_path(root);
+        if json.exists() {
+            return Self::load_json(&json).map(Some);
+        }
+        Ok(None)
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         if path.extension().and_then(|value| value.to_str()) == Some("sqlite") {
             Self::load_sqlite(path)
@@ -138,48 +152,71 @@ impl PersistentVectorDb {
         let mut db: Self = serde_json::from_str(&source)?;
         db.storage = "Json".to_string();
         db.path = Some(path.to_path_buf());
+        if db.records_total == 0 {
+            db.records_total = db.records.len();
+        }
         Ok(db)
     }
 
     pub fn load_sqlite(path: &Path) -> Result<Self> {
+        Self::load_sqlite_with_mode(path, false)
+    }
+
+    pub fn load_sqlite_eager(path: &Path) -> Result<Self> {
+        Self::load_sqlite_with_mode(path, true)
+    }
+
+    fn load_sqlite_with_mode(path: &Path, eager: bool) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open vector DB {}", path.display()))?;
         create_schema(&conn)?;
-        let version = meta_value(&conn, "schema_version")?
-            .unwrap_or_else(|| "0".to_string())
-            .parse::<u32>()
-            .unwrap_or_default();
-        if version != VECTOR_SCHEMA_VERSION {
-            anyhow::bail!(
-                "unsupported vector SQLite schema {}; expected {}",
-                version,
-                VECTOR_SCHEMA_VERSION
-            );
-        }
-        let backend = meta_value(&conn, "backend")?.unwrap_or_else(|| "LocalHash".to_string());
-        let model =
-            meta_value(&conn, "model")?.unwrap_or_else(|| "local-hash-embedding".to_string());
-        let dimensions = meta_value(&conn, "dimensions")?
-            .unwrap_or_else(|| "1536".to_string())
-            .parse::<usize>()
-            .unwrap_or(1536);
-        let root = PathBuf::from(meta_value(&conn, "root")?.unwrap_or_default());
-        let created_unix = meta_value(&conn, "created_unix")?
-            .unwrap_or_else(|| "0".to_string())
-            .parse::<u64>()
-            .unwrap_or_default();
-        let records = load_records(&conn)?;
+        let metadata = load_sqlite_metadata(&conn)?;
+        let records = if eager {
+            load_records(&conn)?
+        } else {
+            Vec::new()
+        };
+        let records_total = if eager {
+            records.len()
+        } else {
+            metadata.records_total
+        };
         Ok(Self {
-            version,
-            backend,
-            model,
-            dimensions,
-            root,
-            created_unix,
+            version: metadata.version,
+            backend: metadata.backend,
+            model: metadata.model,
+            dimensions: metadata.dimensions,
+            root: metadata.root,
+            created_unix: metadata.created_unix,
+            records_total,
             records,
             storage: "SQLite".to_string(),
             path: Some(path.to_path_buf()),
         })
+    }
+
+    pub fn record_count(&self) -> usize {
+        if self.records_total > 0 {
+            self.records_total
+        } else {
+            self.records.len()
+        }
+    }
+
+    pub fn is_sqlite_lazy(&self) -> bool {
+        self.storage == "SQLite"
+            && self.records.is_empty()
+            && self.path.is_some()
+            && self.record_count() > 0
+    }
+
+    pub fn into_eager(self) -> Result<Self> {
+        if self.is_sqlite_lazy() {
+            if let Some(path) = self.path.as_deref() {
+                return Self::load_sqlite_eager(path);
+            }
+        }
+        Ok(self)
     }
 
     pub fn save_default(&self, root: &Path) -> Result<PathBuf> {
@@ -205,6 +242,11 @@ impl PersistentVectorDb {
     }
 
     pub fn save_sqlite(&self, path: &Path) -> Result<()> {
+        if self.is_sqlite_lazy() {
+            anyhow::bail!(
+                "cannot save lazy SQLite vector DB without loaded records; call into_eager() first"
+            );
+        }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -219,7 +261,7 @@ impl PersistentVectorDb {
         write_meta(&tx, "dimensions", self.dimensions.to_string())?;
         write_meta(&tx, "root", self.root.to_string_lossy())?;
         write_meta(&tx, "created_unix", self.created_unix.to_string())?;
-        write_meta(&tx, "records", self.records.len().to_string())?;
+        write_meta(&tx, "records", self.record_count().to_string())?;
         for record in &self.records {
             insert_record_row(&tx, record)?;
         }
@@ -248,32 +290,17 @@ impl PersistentVectorDb {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open vector DB {}", path.display()))?;
         create_schema(&conn)?;
-        let version = meta_value(&conn, "schema_version")?
-            .unwrap_or_else(|| "0".to_string())
-            .parse::<u32>()
-            .unwrap_or_default();
-        let backend = meta_value(&conn, "backend")?.unwrap_or_else(|| "LocalHash".to_string());
-        let model =
-            meta_value(&conn, "model")?.unwrap_or_else(|| "local-hash-embedding".to_string());
-        let dimensions = meta_value(&conn, "dimensions")?
-            .unwrap_or_else(|| "1536".to_string())
-            .parse::<usize>()
-            .unwrap_or(1536);
-        let root = PathBuf::from(meta_value(&conn, "root")?.unwrap_or_default());
-        let created_unix = meta_value(&conn, "created_unix")?
-            .unwrap_or_else(|| "0".to_string())
-            .parse::<u64>()
-            .unwrap_or_default();
+        let metadata = load_sqlite_metadata(&conn)?;
         Ok(PersistentVectorSummary {
             path: path.to_path_buf(),
             storage: "SQLite".to_string(),
-            version,
-            backend,
-            model,
-            dimensions,
-            root,
-            created_unix,
-            records: count_table(&conn, "vector_records")?,
+            version: metadata.version,
+            backend: metadata.backend,
+            model: metadata.model,
+            dimensions: metadata.dimensions,
+            root: metadata.root,
+            created_unix: metadata.created_unix,
+            records: metadata.records_total,
         })
     }
 
@@ -287,7 +314,7 @@ impl PersistentVectorDb {
             dimensions: self.dimensions,
             root: self.root.clone(),
             created_unix: self.created_unix,
-            records: self.records.len(),
+            records: self.record_count(),
         }
     }
 
@@ -306,7 +333,7 @@ impl PersistentVectorDb {
         }
 
         let config = client.config();
-        let records = chunks
+        let records: Vec<VectorRecord> = chunks
             .iter()
             .cloned()
             .zip(vectors)
@@ -318,6 +345,7 @@ impl PersistentVectorDb {
                 text_hash: text_hash(&text),
             })
             .collect();
+        let records_total = records.len();
 
         Ok(Self {
             version: VECTOR_SCHEMA_VERSION,
@@ -326,6 +354,7 @@ impl PersistentVectorDb {
             dimensions: config.dimensions,
             root: root.to_path_buf(),
             created_unix: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            records_total,
             records,
             storage: "SQLite".to_string(),
             path: Some(Self::sqlite_path(root)),
@@ -508,27 +537,15 @@ impl PersistentVectorDb {
     }
 
     pub fn search_vector(&self, query_vector: &[f32], top_k: usize) -> Vec<PersistentVectorHit> {
-        let mut hits = self
-            .records
-            .iter()
-            .filter_map(|record| {
-                let score = cosine_dense(query_vector, &record.vector);
-                (score > 0.0).then(|| PersistentVectorHit {
-                    chunk: record.chunk.clone(),
-                    score,
-                })
-            })
-            .collect::<Vec<_>>();
-        hits.sort_by(|left, right| {
-            right
-                .score
-                .partial_cmp(&left.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| left.chunk.path.cmp(&right.chunk.path))
-                .then_with(|| left.chunk.line_start.cmp(&right.chunk.line_start))
-        });
-        hits.truncate(top_k);
-        hits
+        if top_k == 0 {
+            return Vec::new();
+        }
+        if self.is_sqlite_lazy() {
+            if let Some(path) = self.path.as_deref() {
+                return search_sqlite_vector(path, query_vector, top_k).unwrap_or_default();
+            }
+        }
+        search_records(&self.records, query_vector, top_k)
     }
 
     pub fn config(&self) -> EmbeddingConfig {
@@ -588,6 +605,17 @@ struct RecordHeader {
     text_hash: String,
 }
 
+#[derive(Debug, Clone)]
+struct SqliteVectorMetadata {
+    version: u32,
+    backend: String,
+    model: String,
+    dimensions: usize,
+    root: PathBuf,
+    created_unix: u64,
+    records_total: usize,
+}
+
 fn create_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
@@ -614,6 +642,41 @@ fn create_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_vector_records_text_hash ON vector_records(text_hash);",
     )?;
     Ok(())
+}
+
+fn load_sqlite_metadata(conn: &Connection) -> Result<SqliteVectorMetadata> {
+    let version = meta_value(conn, "schema_version")?
+        .unwrap_or_else(|| "0".to_string())
+        .parse::<u32>()
+        .unwrap_or_default();
+    if version != VECTOR_SCHEMA_VERSION {
+        anyhow::bail!(
+            "unsupported vector SQLite schema {}; expected {}",
+            version,
+            VECTOR_SCHEMA_VERSION
+        );
+    }
+    let backend = meta_value(conn, "backend")?.unwrap_or_else(|| "LocalHash".to_string());
+    let model = meta_value(conn, "model")?.unwrap_or_else(|| "local-hash-embedding".to_string());
+    let dimensions = meta_value(conn, "dimensions")?
+        .unwrap_or_else(|| "1536".to_string())
+        .parse::<usize>()
+        .unwrap_or(1536);
+    let root = PathBuf::from(meta_value(conn, "root")?.unwrap_or_default());
+    let created_unix = meta_value(conn, "created_unix")?
+        .unwrap_or_else(|| "0".to_string())
+        .parse::<u64>()
+        .unwrap_or_default();
+    let records_total = count_table(conn, "vector_records")?;
+    Ok(SqliteVectorMetadata {
+        version,
+        backend,
+        model,
+        dimensions,
+        root,
+        created_unix,
+        records_total,
+    })
 }
 
 fn clear_tables(conn: &Connection) -> Result<()> {
@@ -656,37 +719,104 @@ fn load_records(conn: &Connection) -> Result<Vec<VectorRecord>> {
          FROM vector_records
          ORDER BY file_path, line_start, id",
     )?;
-    let rows = stmt.query_map([], |row| {
-        let chunk_type: String = row.get(4)?;
-        let symbols_json: String = row.get(8)?;
-        let imports_json: String = row.get(9)?;
-        let module_path_json: String = row.get(10)?;
-        let vector: Vec<u8> = row.get(12)?;
-        let id: String = row.get(0)?;
-        Ok(VectorRecord {
-            id: id.clone(),
-            chunk: RichChunk {
-                id,
-                path: PathBuf::from(row.get::<_, String>(1)?),
-                line_start: row.get::<_, i64>(2)? as usize,
-                line_end: row.get::<_, i64>(3)? as usize,
-                chunk_type: parse_chunk_type(&chunk_type),
-                signature: row.get(5)?,
-                source: row.get(6)?,
-                docs: row.get(7)?,
-                symbols: serde_json::from_str(&symbols_json).unwrap_or_default(),
-                imports: serde_json::from_str(&imports_json).unwrap_or_default(),
-                module_path: serde_json::from_str(&module_path_json).unwrap_or_default(),
-            },
-            text_hash: row.get(11)?,
-            vector: decode_vector(&vector),
-        })
-    })?;
+    let rows = stmt.query_map([], vector_record_from_row)?;
     let mut records = Vec::new();
     for row in rows {
         records.push(row?);
     }
     Ok(records)
+}
+
+fn vector_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VectorRecord> {
+    let chunk_type: String = row.get(4)?;
+    let symbols_json: String = row.get(8)?;
+    let imports_json: String = row.get(9)?;
+    let module_path_json: String = row.get(10)?;
+    let vector: Vec<u8> = row.get(12)?;
+    let id: String = row.get(0)?;
+    Ok(VectorRecord {
+        id: id.clone(),
+        chunk: RichChunk {
+            id,
+            path: PathBuf::from(row.get::<_, String>(1)?),
+            line_start: row.get::<_, i64>(2)? as usize,
+            line_end: row.get::<_, i64>(3)? as usize,
+            chunk_type: parse_chunk_type(&chunk_type),
+            signature: row.get(5)?,
+            source: row.get(6)?,
+            docs: row.get(7)?,
+            symbols: serde_json::from_str(&symbols_json).unwrap_or_default(),
+            imports: serde_json::from_str(&imports_json).unwrap_or_default(),
+            module_path: serde_json::from_str(&module_path_json).unwrap_or_default(),
+        },
+        text_hash: row.get(11)?,
+        vector: decode_vector(&vector),
+    })
+}
+
+fn search_records(
+    records: &[VectorRecord],
+    query_vector: &[f32],
+    top_k: usize,
+) -> Vec<PersistentVectorHit> {
+    let mut hits = records
+        .iter()
+        .filter_map(|record| {
+            let score = cosine_dense(query_vector, &record.vector);
+            (score > 0.0).then(|| PersistentVectorHit {
+                chunk: record.chunk.clone(),
+                score,
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_and_truncate_hits(&mut hits, top_k);
+    hits
+}
+
+fn search_sqlite_vector(
+    path: &Path,
+    query_vector: &[f32],
+    top_k: usize,
+) -> Result<Vec<PersistentVectorHit>> {
+    let conn = Connection::open(path)
+        .with_context(|| format!("failed to open vector DB {}", path.display()))?;
+    create_schema(&conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, file_path, line_start, line_end, chunk_type, signature, source, docs,
+                symbols_json, imports_json, module_path_json, text_hash, vector
+         FROM vector_records
+         ORDER BY file_path, line_start, id",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut hits = Vec::new();
+    let soft_limit = top_k.saturating_mul(8).max(256);
+    while let Some(row) = rows.next()? {
+        let record = vector_record_from_row(row)?;
+        let score = cosine_dense(query_vector, &record.vector);
+        if score > 0.0 {
+            hits.push(PersistentVectorHit {
+                chunk: record.chunk,
+                score,
+            });
+            if hits.len() > soft_limit {
+                sort_and_truncate_hits(&mut hits, soft_limit / 2);
+            }
+        }
+    }
+    sort_and_truncate_hits(&mut hits, top_k);
+    Ok(hits)
+}
+
+fn sort_and_truncate_hits(hits: &mut Vec<PersistentVectorHit>, top_k: usize) {
+    hits.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.chunk.path.cmp(&right.chunk.path))
+            .then_with(|| left.chunk.line_start.cmp(&right.chunk.line_start))
+    });
+    hits.truncate(top_k);
 }
 
 fn load_record_headers(conn: &Connection) -> Result<BTreeMap<String, RecordHeader>> {
@@ -827,9 +957,21 @@ mod tests {
         assert!(path.exists());
         assert_eq!(path.file_name().unwrap(), "vectors.sqlite");
         let loaded = PersistentVectorDb::load_default(&root).unwrap().unwrap();
+        assert_eq!(loaded.record_count(), 1);
+        assert!(loaded.records.is_empty());
+        let eager = PersistentVectorDb::load_default_eager(&root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(eager.records.len(), 1);
         let client = EmbeddingClient::new(loaded.config());
-        let hits = db.search("validate auth token", 1, &client).unwrap();
+        let hits = loaded.search("validate auth token", 1, &client).unwrap();
         assert_eq!(hits[0].chunk.path, PathBuf::from("src/auth.rs"));
+        assert_eq!(
+            db.search("validate auth token", 1, &client).unwrap()[0]
+                .chunk
+                .path,
+            PathBuf::from("src/auth.rs")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -851,7 +993,8 @@ mod tests {
             refresh_and_save_default(&root, &updated, EmbeddingConfig::local_hash(128), 8).unwrap();
         assert_eq!(result.mode, PersistentVectorRefreshMode::Incremental);
         assert_eq!(result.touched_paths, 1);
-        assert_eq!(db.records.len(), 2);
+        assert_eq!(db.record_count(), 2);
+        assert!(db.records.is_empty());
         let client = EmbeddingClient::new(db.config());
         assert_eq!(
             db.search("login user", 1, &client).unwrap()[0].chunk.path,

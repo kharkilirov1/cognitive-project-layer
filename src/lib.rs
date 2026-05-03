@@ -150,7 +150,7 @@ impl CognitiveProjectLayer {
             &graph,
             persistent_vector_db
                 .as_ref()
-                .map(|db| db.records.len())
+                .map(PersistentVectorDb::record_count)
                 .unwrap_or_else(|| vector_store.len()),
         );
 
