@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## 0.1.2 - 2026-05-03
+
+### Added
+
+- `install.ps1` for Windows PowerShell installs from GitHub Releases.
+- `install.sh` for Linux/macOS installs from GitHub Releases.
+- `docs/INSTALL.md` with quick install, custom install directory, and manual install.
+- `cpl --version` and `cpl-mcp --version`.
+
+### Changed
+
+- Release archives now include install scripts.
+- README now has a 30-second quick install path.
+
 ## 0.1.1 - 2026-05-03
 
 ### Added

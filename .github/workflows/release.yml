@@ -51,7 +51,7 @@ jobs:
           mkdir -p "dist/${package}"
           cp target/release/cpl "dist/${package}/"
           cp target/release/cpl-mcp "dist/${package}/"
-          cp README.md LICENSE NOTICE CHANGELOG.md "dist/${package}/"
+          cp README.md LICENSE NOTICE CHANGELOG.md install.sh install.ps1 "dist/${package}/"
           tar -C dist -czf "dist/${package}.tar.gz" "${package}"
 
       - name: Package Windows binaries
@@ -63,7 +63,7 @@ jobs:
           New-Item -ItemType Directory -Force "dist/$package" | Out-Null
           Copy-Item target/release/cpl.exe "dist/$package/"
           Copy-Item target/release/cpl-mcp.exe "dist/$package/"
-          Copy-Item README.md,LICENSE,NOTICE,CHANGELOG.md "dist/$package/"
+          Copy-Item README.md,LICENSE,NOTICE,CHANGELOG.md,install.sh,install.ps1 "dist/$package/"
           Compress-Archive -Path "dist/$package/*" -DestinationPath "dist/$package.zip" -Force
 
       - name: Upload package artifact

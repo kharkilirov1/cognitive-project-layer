@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 #[derive(Debug, Parser)]
 #[command(name = "cpl")]
 #[command(about = "Cognitive Project Layer for coding agents")]
+#[command(version)]
 struct Cli {
     #[arg(long, short = 'r', default_value = ".", global = true)]
     root: PathBuf,

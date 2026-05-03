@@ -6,6 +6,7 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(name = "cpl-mcp")]
 #[command(about = "MCP stdio server for Cognitive Project Layer")]
+#[command(version)]
 struct Cli {
     #[arg(long, short = 'r', default_value = ".")]
     root: PathBuf,

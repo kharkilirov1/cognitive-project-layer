@@ -43,6 +43,29 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Fixture-based retrieval evals and CLI latency benchmarks.
 - Optional ArkTS/HarmonyOS profile; see [`docs/PROFILES.md`](docs/PROFILES.md).
 
+## Quick install
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/kharkilirov1/cognitive-project-layer/main/install.ps1 | iex
+```
+
+Linux/macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kharkilirov1/cognitive-project-layer/main/install.sh | sh
+```
+
+Verify:
+
+```powershell
+cpl --version
+cpl scan --root .
+```
+
+More options: [`docs/INSTALL.md`](docs/INSTALL.md).
+
 ## Install prebuilt binaries
 
 Download the latest archive for your OS from
@@ -61,6 +84,8 @@ Each release also includes `SHA256SUMS`. The archives contain:
 - `LICENSE`
 - `NOTICE`
 - `CHANGELOG.md`
+- `install.sh`
+- `install.ps1`
 
 Put `cpl` and `cpl-mcp` on your `PATH`, or run them from the extracted folder.
 
@@ -262,6 +287,7 @@ evals/
   retrieval.json       retrieval eval cases
   fixtures/            small Rust, TypeScript, and ArkTS projects
 docs/
+  INSTALL.md
   EVALS.md
   PROFILES.md
   OPENCODE.md
