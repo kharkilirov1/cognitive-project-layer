@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning once stable releases begin.
 
+## Unreleased
+
+### Added
+
+- Safe local self-heal through `cpl heal`, `cpl doctor --fix`, MCP `cpl_heal`,
+  HTTP `POST /heal`, and the dashboard maintenance panel.
+- HTTP server startup index self-heal controlled by `CPL_SELF_HEAL`.
+- Watcher persistence refresh after file-change batches.
+- Project config support via `.cpl/config.toml` for ignore paths, embedding
+  defaults, context budget, benchmark gates, and UI defaults.
+- Embedded zero-dependency dashboard assets under `assets/`, including graph
+  exploration, tabbed UI, minimap, force-layout pass, and self-heal action.
+- Public CodeSearchNet retrieval eval runner and fixture file-localization eval.
+- MCP/Python wrapper support for `cpl_heal`.
+
+### Changed
+
+- Dashboard HTML/CSS/JS moved out of `src/dashboard.rs` into embedded asset
+  files for maintainability.
+- Retrieval graph expansion now adds query-specific policy seeds for build,
+  symbol, architecture, and explanation queries.
+- Embedding and doctor errors now include actionable Ollama/local-hash fallback
+  guidance.
+- Scanner ignore handling now includes `.cpl/config.toml` ignore paths.
+
+### Safety
+
+- Self-heal refreshes existing embeddings by default but does not create missing
+  embeddings unless `--embeddings ensure` is requested.
+- Self-heal skips potentially external embedding backends unless an embedding
+  backend is explicitly passed.
+- Local React/Vite dashboard prototype under `ui/` is ignored and excluded from
+  the release diff; the committed UI is the embedded zero-dependency dashboard.
+
 ## 0.7.0 - 2026-05-04
 
 ### Added

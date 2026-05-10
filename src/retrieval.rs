@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::confidence::{
     ConfidenceEngine, ConfidenceInput, ConfidenceProfile, ConfidenceReason, RetrievalStrategy,
 };
-use crate::graph::ProjectGraph;
+use crate::graph::{GraphEdgeKind, GraphNodeKind, ProjectGraph};
 use crate::memory::WorkingMemory;
 use crate::persistent_index::PersistentIndex;
 use crate::persistent_vector::PersistentVectorDb;
@@ -362,6 +362,7 @@ impl HybridRetriever {
             .map(|chunk| chunk.path.clone())
             .collect::<Vec<_>>();
         graph_seeds.extend(graph.related_to_symbol_paths(&analysis.symbols, 2));
+        graph_seeds.extend(query_policy_seed_paths(graph, skeleton, &analysis));
         for rel_path in graph.expand_files(&graph_seeds, 2) {
             add_file_candidate(root, &mut candidates, &rel_path, 1, "graph_expansion", 0.55);
         }
@@ -438,6 +439,63 @@ impl HybridRetriever {
             fallback_plan,
         })
     }
+}
+
+fn query_policy_seed_paths(
+    graph: &ProjectGraph,
+    skeleton: &Skeleton,
+    analysis: &QueryAnalysis,
+) -> Vec<PathBuf> {
+    let mut paths = BTreeSet::new();
+    match analysis.intent {
+        QueryIntent::BuildError => {
+            for config in &skeleton.configs {
+                paths.insert(config.path.clone());
+            }
+            for entry in &skeleton.entry_points {
+                paths.insert(entry.path.clone());
+            }
+            for edge in &graph.edges {
+                if edge.kind == GraphEdgeKind::NativeBinding {
+                    for node_id in [&edge.from, &edge.to] {
+                        if let Some(path) = graph
+                            .nodes
+                            .iter()
+                            .find(|node| &node.id == node_id)
+                            .and_then(|node| node.path.clone())
+                        {
+                            paths.insert(path);
+                        }
+                    }
+                }
+            }
+        }
+        QueryIntent::FindSymbol => {
+            for symbol in &analysis.symbols {
+                for path in graph.related_to_symbol_paths(std::slice::from_ref(symbol), 2) {
+                    paths.insert(path);
+                }
+            }
+        }
+        QueryIntent::ArchitectureQuestion | QueryIntent::ExplainCode => {
+            for node in &graph.nodes {
+                if matches!(node.kind, GraphNodeKind::Module | GraphNodeKind::Config)
+                    && let Some(path) = node.path.clone()
+                {
+                    paths.insert(path);
+                }
+            }
+            for entry in &skeleton.entry_points {
+                paths.insert(entry.path.clone());
+            }
+        }
+        QueryIntent::AddFeature
+        | QueryIntent::FixBug
+        | QueryIntent::Refactor
+        | QueryIntent::TestFailure
+        | QueryIntent::Unknown => {}
+    }
+    paths.into_iter().collect()
 }
 
 fn analyze_query(query: &str) -> Result<QueryAnalysis> {

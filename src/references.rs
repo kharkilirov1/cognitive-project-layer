@@ -133,7 +133,7 @@ impl ReferenceIndex {
         self.by_symbol.values().map(Vec::len).sum()
     }
 
-    fn remove_path(&mut self, rel: &Path) {
+    pub fn remove_path(&mut self, rel: &Path) {
         self.by_symbol.retain(|_, references| {
             references.retain(|reference| reference.path != rel);
             !references.is_empty()

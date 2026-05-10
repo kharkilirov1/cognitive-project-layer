@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cognitive Project Layer Dashboard</title>
+  <style>
+{{DASHBOARD_CSS}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-left">
+        <div class="logo">CL</div>
+        <div>
+          <h1>Cognitive Project Layer</h1>
+          <div class="sub">Local project cognition dashboard</div>
+        </div>
+      </div>
+      <div class="brand-actions">
+        <span class="pill mono">127.0.0.1:3878</span>
+        <span class="pill">zero-dependency UI</span>
+      </div>
+    </div>
+  </header>
+  <main>
+    <section class="hero">
+      <div class="hero-row">
+        <div>
+          <h2>Project intelligence, visualized.</h2>
+          <p>Explore structure, graph relationships, retrieval, indexes, vectors, and evaluation history in one local control surface.</p>
+        </div>
+        <div class="hero-metrics">
+          <span class="hero-chip">Graph explorer</span>
+          <span class="hero-chip">Hybrid retrieval</span>
+          <span class="hero-chip">Local only</span>
+        </div>
+      </div>
+    </section>
+    <section class="grid cards" id="cards">
+      <div class="card"><div class="label">● Health</div><div class="value" id="healthValue">...</div><div class="detail" id="healthDetail"></div></div>
+      <div class="card"><div class="label">◇ Sources</div><div class="value" id="sourceValue">...</div><div class="detail" id="sourceDetail"></div></div>
+      <div class="card"><div class="label">▣ SQLite index</div><div class="value" id="indexValue">...</div><div class="detail" id="indexDetail"></div></div>
+      <div class="card"><div class="label">✦ Vector DB</div><div class="value" id="vectorValue">...</div><div class="detail" id="vectorDetail"></div></div>
+      <div class="card"><div class="label">✚ Doctor</div><div class="value" id="doctorValue">...</div><div class="detail" id="doctorDetail"></div></div>
+    </section>
+
+    <section class="panel">
+      <h2>Maintenance</h2>
+      <div class="toolbar">
+        <button onclick="selfHeal()">Self-heal</button>
+        <button onclick="refreshIndex()">Refresh SQLite index</button>
+        <button onclick="refreshEmbeddings()">Refresh embeddings</button>
+        <button class="secondary" onclick="loadOverview()">Reload overview</button>
+        <span class="pill">served by <span class="mono">cpl serve</span></span>
+      </div>
+      <pre id="maintenanceOut">Ready.</pre>
+    </section>
+
+    <nav class="tabs" aria-label="Dashboard sections">
+      <button class="tab active" data-tab="graph" onclick="showTab('graph')">Graph</button>
+      <button class="tab" data-tab="search" onclick="showTab('search')">Search</button>
+      <button class="tab" data-tab="insights" onclick="showTab('insights')">Insights</button>
+      <button class="tab" data-tab="api" onclick="showTab('api')">API</button>
+    </nav>
+
+    <section class="panel tab-panel" data-panel="graph">
+      <h2>Project graph</h2>
+      <div class="toolbar">
+        <button class="secondary" onclick="loadGraph()">Reload graph</button>
+        <button class="secondary" onclick="runForceLayout()">Force layout</button>
+        <button class="secondary" onclick="resetGraphView()">Reset view</button>
+        <input id="graphSearch" placeholder="Search nodes, paths, symbols..." oninput="renderGraph()" onkeydown="submitOnEnter(event, focusFirstGraphMatch)">
+        <select id="graphKind" onchange="renderGraph()">
+          <option value="all">all nodes</option>
+          <option value="Module">modules</option>
+          <option value="File">files</option>
+          <option value="Symbol">symbols</option>
+          <option value="Config">configs</option>
+        </select>
+        <select id="graphDepth" onchange="renderGraph()">
+          <option value="120">top 120</option>
+          <option value="240">top 240</option>
+          <option value="480">top 480</option>
+          <option value="9999">all</option>
+        </select>
+        <span class="pill mono">GET /graph</span>
+      </div>
+      <div class="graph-layout" style="margin-top: 12px;">
+        <div class="graph-stage">
+          <svg id="projectGraph" role="img" aria-label="Interactive project dependency graph"></svg>
+          <div class="graph-tip" id="graphTip"></div>
+        </div>
+        <aside class="graph-side">
+          <div class="graph-stats">
+            <div class="mini-card"><div class="label">Nodes</div><div class="value" id="graphNodes">...</div></div>
+            <div class="mini-card"><div class="label">Edges</div><div class="value" id="graphEdges">...</div></div>
+          </div>
+          <div class="mini-card">
+            <div class="label">Legend</div>
+            <div class="toolbar" style="margin-top:8px">
+              <span class="pill"><i class="legend-dot" style="background:#78a6ff"></i>File</span>
+              <span class="pill"><i class="legend-dot" style="background:#7ee787"></i>Module</span>
+              <span class="pill"><i class="legend-dot" style="background:#ffd166"></i>Symbol</span>
+              <span class="pill"><i class="legend-dot" style="background:#ff7b72"></i>Config</span>
+            </div>
+          </div>
+          <div class="mini-card">
+            <div class="label">Minimap</div>
+            <svg id="graphMinimap" aria-label="Graph minimap"></svg>
+          </div>
+          <div class="mini-card">
+            <div class="label">Selected</div>
+            <pre id="graphDetails" style="max-height:170px; min-height:110px;">Click a node.</pre>
+          </div>
+          <div class="mini-card">
+            <div class="label">Top connected</div>
+            <div class="node-list" id="graphTop"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="grid three tab-panel" data-panel="search" hidden>
+      <div class="panel">
+        <h2>Hybrid retrieve</h2>
+        <div class="toolbar">
+          <input id="retrieveQuery" value="persistent vector sqlite" onkeydown="submitOnEnter(event, runRetrieve)">
+          <button onclick="runRetrieve()">Run</button>
+        </div>
+        <pre id="retrieveOut"></pre>
+      </div>
+      <div class="panel">
+        <h2>FTS index search</h2>
+        <div class="toolbar">
+          <input id="indexQuery" value="dashboard vector" onkeydown="submitOnEnter(event, runIndexSearch)">
+          <button onclick="runIndexSearch()">Run</button>
+        </div>
+        <div class="hits" id="indexHits"></div>
+      </div>
+      <div class="panel">
+        <h2>Embedding search</h2>
+        <div class="toolbar">
+          <input id="embedQuery" value="lazy sqlite vector search" onkeydown="submitOnEnter(event, runEmbedSearch)">
+          <button onclick="runEmbedSearch()">Run</button>
+        </div>
+        <div class="hits" id="embedHits"></div>
+      </div>
+    </section>
+
+    <section class="grid two tab-panel" data-panel="insights" hidden>
+      <div class="panel">
+        <h2>Transparency panel</h2>
+        <div class="toolbar">
+          <input id="panelQuery" value="HTTP server dashboard" onkeydown="submitOnEnter(event, runPanel)">
+          <button onclick="runPanel()">Render</button>
+        </div>
+        <pre id="panelOut"></pre>
+      </div>
+      <div class="panel">
+        <h2>Benchmarks / eval history</h2>
+        <div class="toolbar">
+          <button class="secondary" onclick="loadBenchmarks()">Reload benchmarks</button>
+        </div>
+        <div id="benchmarks"></div>
+      </div>
+    </section>
+
+    <section class="panel tab-panel" data-panel="api" hidden>
+      <h2>API tools</h2>
+      <div id="tools" class="toolbar"></div>
+    </section>
+  </main>
+  <script>
+{{DASHBOARD_JS}}
+  </script>
+</body>
+</html>

@@ -2,6 +2,9 @@ use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::Path;
+
+use crate::config::ProjectConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EmbeddingBackend {
@@ -57,22 +60,39 @@ impl EmbeddingConfig {
     }
 
     pub fn from_env_or_local() -> Self {
+        Self::from_config_or_env(ProjectConfig::default())
+    }
+
+    pub fn from_project_or_env(root: &Path) -> Self {
+        Self::from_config_or_env(ProjectConfig::load(root))
+    }
+
+    fn from_config_or_env(project: ProjectConfig) -> Self {
         let backend = std::env::var("CPL_EMBEDDING_BACKEND")
-            .unwrap_or_else(|_| "local-hash".to_string())
+            .ok()
+            .or(project.embedding_backend)
+            .unwrap_or_else(|| "local-hash".to_string())
             .to_ascii_lowercase();
         let dimensions = std::env::var("CPL_EMBEDDING_DIMENSIONS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
+            .or(project.embedding_dimensions)
             .unwrap_or(1536);
+        let model = || {
+            std::env::var("CPL_EMBEDDING_MODEL")
+                .ok()
+                .or(project.embedding_model.clone())
+        };
 
         match backend.as_str() {
-            "openai" => Self::openai(std::env::var("CPL_EMBEDDING_MODEL").ok()),
-            "ollama" => Self::ollama(std::env::var("CPL_EMBEDDING_MODEL").ok(), dimensions),
+            "openai" => Self::openai(model()),
+            "ollama" => Self::ollama(model(), dimensions),
             "openai-compatible" | "local-model" | "local" => Self::openai_compatible(
                 std::env::var("CPL_EMBEDDING_ENDPOINT")
-                    .unwrap_or_else(|_| "http://localhost:11434/v1/embeddings".to_string()),
-                std::env::var("CPL_EMBEDDING_MODEL")
-                    .unwrap_or_else(|_| "nomic-embed-text".to_string()),
+                    .ok()
+                    .or(project.embedding_endpoint)
+                    .unwrap_or_else(|| "http://localhost:11434/v1/embeddings".to_string()),
+                model().unwrap_or_else(|| "nomic-embed-text".to_string()),
                 dimensions,
             ),
             _ => Self::local_hash(dimensions),
@@ -151,11 +171,14 @@ impl EmbeddingClient {
             }
             let response = builder
                 .send()
-                .with_context(|| format!("failed to call embeddings endpoint: {endpoint}"))?;
+                .with_context(|| embedding_endpoint_help(endpoint, &self.config))?;
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().unwrap_or_default();
-                anyhow::bail!("embedding request failed with {status}: {body}");
+                anyhow::bail!(
+                    "{}",
+                    embedding_status_help(status.as_u16(), &body, &self.config)
+                );
             }
             let mut response: EmbeddingResponse = response.json()?;
             response.data.sort_by_key(|item| item.index);
@@ -167,6 +190,40 @@ impl EmbeddingClient {
             );
         }
         Ok(all)
+    }
+}
+
+fn embedding_endpoint_help(endpoint: &str, config: &EmbeddingConfig) -> String {
+    match config.backend {
+        EmbeddingBackend::Ollama => format!(
+            "failed to call Ollama embeddings endpoint {endpoint}. \
+Ollama may not be running; run `ollama serve`, then `ollama pull {}`. \
+Offline fallback: use `--backend local-hash` or `CPL_EMBEDDING_BACKEND=local-hash`.",
+            config.model
+        ),
+        EmbeddingBackend::OpenAi => {
+            "failed to call OpenAI embeddings endpoint; check network and OPENAI_API_KEY"
+                .to_string()
+        }
+        EmbeddingBackend::OpenAiCompatible => format!(
+            "failed to call embeddings endpoint {endpoint}; check CPL_EMBEDDING_ENDPOINT, model `{}`, and API key if required. Fallback: `--backend local-hash`.",
+            config.model
+        ),
+        EmbeddingBackend::LocalHash => {
+            "local-hash embeddings do not use an HTTP endpoint".to_string()
+        }
+    }
+}
+
+fn embedding_status_help(status: u16, body: &str, config: &EmbeddingConfig) -> String {
+    match config.backend {
+        EmbeddingBackend::Ollama => format!(
+            "Ollama embedding request failed with HTTP {status}: {body}. \
+If the model is missing, run `ollama pull {}`; if Ollama is stopped, run `ollama serve`; \
+fallback: `--backend local-hash`.",
+            config.model
+        ),
+        _ => format!("embedding request failed with HTTP {status}: {body}"),
     }
 }
 

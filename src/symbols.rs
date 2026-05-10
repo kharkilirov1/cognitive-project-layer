@@ -59,12 +59,16 @@ impl SymbolIndex {
     }
 
     pub fn refresh_file(&mut self, path: &Path) -> Result<()> {
-        self.symbols.retain(|symbol| symbol.path != path);
-        self.rebuild_map();
+        self.remove_file(path);
         if path.exists() && is_source_file(path) {
             self.add_file(path)?;
         }
         Ok(())
+    }
+
+    pub fn remove_file(&mut self, path: &Path) {
+        self.symbols.retain(|symbol| symbol.path != path);
+        self.rebuild_map();
     }
 
     pub fn find(&self, query: &str) -> Vec<SymbolLocation> {

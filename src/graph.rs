@@ -425,7 +425,7 @@ impl ProjectGraph {
         Ok(())
     }
 
-    fn remove_file_surface(&mut self, rel: &Path) {
+    pub fn remove_file_surface(&mut self, rel: &Path) {
         let mut removed_ids = BTreeSet::from([file_id(rel), config_id(rel)]);
         self.nodes.retain(|node| {
             let remove = node.path.as_deref() == Some(rel)

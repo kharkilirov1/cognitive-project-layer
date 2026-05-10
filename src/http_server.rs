@@ -17,6 +17,7 @@ use crate::persistent_vector::{
     PersistentVectorDb, build_and_save_default, refresh_and_save_default,
 };
 use crate::scanner::ProjectScanner;
+use crate::self_heal::{SelfHealEmbeddingMode, SelfHealOptions, env_flag_enabled, self_heal};
 use crate::tools::FallbackTools;
 use crate::{
     CognitiveProjectLayer, DEFAULT_INDEX_REFRESH_LIMIT, refresh_or_rebuild_persistent_index,
@@ -33,6 +34,22 @@ pub fn serve_project_with_budget(
 ) -> Result<()> {
     let root = root.as_ref().canonicalize()?;
     let listener = TcpListener::bind(addr).with_context(|| format!("failed to bind {addr}"))?;
+    if env_flag_enabled("CPL_SELF_HEAL", true) {
+        match refresh_or_rebuild_persistent_index(
+            &root,
+            max_tokens,
+            std::env::var("CPL_INDEX_REFRESH_LIMIT")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_INDEX_REFRESH_LIMIT),
+        ) {
+            Ok(result) => eprintln!(
+                "Self-heal index: mode={:?}; touched={}",
+                result.mode, result.touched_files
+            ),
+            Err(error) => eprintln!("Self-heal index skipped: {error}"),
+        }
+    }
     let layer = Arc::new(Mutex::new(CognitiveProjectLayer::initialize_with_budget(
         &root, max_tokens,
     )?));
@@ -115,6 +132,7 @@ fn route_request(
                 "/health",
                 "/scan",
                 "/skeleton",
+                "/graph",
                 "/panel",
                 "/retrieve?query=...",
                 "/context?query=...&max_tokens=32000",
@@ -123,6 +141,7 @@ fn route_request(
                 "/embed-search?query=...",
                 "/embeddings/rebuild",
                 "/embeddings/refresh",
+                "/heal",
                 "/index-db",
                 "/index/freshness",
                 "/index/search?query=...",
@@ -141,6 +160,12 @@ fn route_request(
             Ok(json!({
                 "skeleton": layer.skeleton,
                 "prompt": layer.skeleton.render_prompt()
+            }))
+        }),
+        ("GET", "/graph") => with_layer(layer, |layer| {
+            Ok(json!({
+                "graph": layer.graph,
+                "summary": layer.graph.render_summary()
             }))
         }),
         ("GET", "/panel") => {
@@ -221,7 +246,7 @@ fn route_request(
             let dimensions = input_usize(&request, "dimensions").unwrap_or(768);
             let root = root.to_path_buf();
             with_layer(layer, |layer| {
-                let config = embedding_config(&backend, model, dimensions)?;
+                let config = embedding_config(&root, &backend, model, dimensions)?;
                 let (db, path) = build_and_save_default(&root, &layer.vector_store.chunks, config)?;
                 layer.persistent_vector_db = Some(db.clone());
                 Ok(json!({
@@ -239,7 +264,7 @@ fn route_request(
                 .unwrap_or(DEFAULT_INDEX_REFRESH_LIMIT);
             let root = root.to_path_buf();
             with_layer(layer, |layer| {
-                let config = embedding_config(&backend, model, dimensions)?;
+                let config = embedding_config(&root, &backend, model, dimensions)?;
                 let (result, db) = refresh_and_save_default(
                     &root,
                     &layer.vector_store.chunks,
@@ -252,6 +277,42 @@ fn route_request(
                     "text": result.render_human()
                 }))
             })
+        }
+        ("POST", "/heal") => {
+            let embeddings = input_string(&request, "embeddings")
+                .map(|value| SelfHealEmbeddingMode::parse(&value))
+                .transpose()?
+                .unwrap_or(SelfHealEmbeddingMode::Existing);
+            let max_incremental_files = input_usize(&request, "max_incremental_files")
+                .unwrap_or(DEFAULT_INDEX_REFRESH_LIMIT);
+            let max_incremental_paths = input_usize(&request, "max_incremental_paths")
+                .unwrap_or(DEFAULT_INDEX_REFRESH_LIMIT);
+            let embedding_config = input_string(&request, "backend")
+                .map(|backend| {
+                    let dimensions = input_usize(&request, "dimensions")
+                        .unwrap_or_else(|| default_embedding_dimensions(&backend));
+                    embedding_config(root, &backend, input_string(&request, "model"), dimensions)
+                })
+                .transpose()?;
+            let allow_external_embeddings = embedding_config.is_some();
+            let max_tokens = layer_max_tokens(layer)?;
+            let report = self_heal(
+                root,
+                SelfHealOptions {
+                    max_tokens,
+                    max_incremental_files,
+                    embeddings,
+                    embedding_config,
+                    allow_external_embeddings,
+                    max_incremental_paths,
+                },
+            )?;
+            with_layer(layer, |layer| {
+                *layer = CognitiveProjectLayer::initialize_with_budget(root, max_tokens)?;
+                Ok(json!({}))
+            })?;
+            let text = report.render_human();
+            Ok(json!({ "report": report, "text": text }))
         }
         ("GET", "/vector-db") => {
             let db = PersistentVectorDb::load_default(root)?
@@ -516,11 +577,13 @@ fn percent_decode(value: &str) -> String {
 }
 
 fn embedding_config(
+    root: &Path,
     backend: &str,
     model: Option<String>,
     dimensions: usize,
 ) -> Result<EmbeddingConfig> {
     match backend.to_ascii_lowercase().as_str() {
+        "project" | "config" => Ok(EmbeddingConfig::from_project_or_env(root)),
         "ollama" => Ok(EmbeddingConfig::ollama(model, dimensions)),
         "local-hash" | "hash" => Ok(EmbeddingConfig::local_hash(dimensions)),
         "openai-compatible" | "local" | "local-model" => Ok(EmbeddingConfig::openai_compatible(
@@ -531,6 +594,13 @@ fn embedding_config(
         )),
         "openai" => Ok(EmbeddingConfig::openai(model)),
         other => anyhow::bail!("unknown embedding backend `{other}`"),
+    }
+}
+
+fn default_embedding_dimensions(backend: &str) -> usize {
+    match backend.to_ascii_lowercase().as_str() {
+        "ollama" | "openai-compatible" | "local" | "local-model" => 768,
+        _ => 1536,
     }
 }
 
@@ -555,5 +625,49 @@ mod tests {
                 .unwrap()
                 .contains("Dashboard")
         );
+    }
+
+    #[test]
+    fn graph_endpoint_returns_json_graph() {
+        let root = std::env::temp_dir().join(format!("cpl-http-graph-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='tmp'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src").join("lib.rs"), "pub fn hello() {}\n").unwrap();
+
+        let layer = Arc::new(Mutex::new(
+            CognitiveProjectLayer::initialize(&root).unwrap(),
+        ));
+        let response = route_request(
+            &root,
+            &layer,
+            HttpRequest {
+                method: "GET".to_string(),
+                path: "/graph".to_string(),
+                query: BTreeMap::new(),
+                body: Value::Null,
+            },
+        );
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body.pointer("/graph/nodes")
+                .and_then(Value::as_array)
+                .is_some()
+        );
+        assert!(
+            body.pointer("/graph/edges")
+                .and_then(Value::as_array)
+                .is_some()
+        );
+        assert!(body.get("summary").and_then(Value::as_str).is_some());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

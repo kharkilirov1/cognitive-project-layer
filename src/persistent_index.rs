@@ -396,18 +396,24 @@ impl PersistentIndex {
         }
 
         let mut snapshot = Self::load_snapshot(path, &root)?;
+        let current_files = current_indexed_files(&root, scan)?;
         for rel in &touched {
             let abs = root.join(rel);
-            snapshot.symbols.refresh_file(&abs)?;
-            snapshot
-                .references
-                .refresh_file(&root, &abs, &snapshot.symbols)?;
-            snapshot
-                .graph
-                .refresh_file(&root, scan, &snapshot.symbols, &abs)?;
-
+            if current_files.contains_key(rel) {
+                snapshot.symbols.refresh_file(&abs)?;
+                snapshot
+                    .references
+                    .refresh_file(&root, &abs, &snapshot.symbols)?;
+                snapshot
+                    .graph
+                    .refresh_file(&root, scan, &snapshot.symbols, &abs)?;
+            } else {
+                snapshot.symbols.remove_file(&abs);
+                snapshot.references.remove_path(rel);
+                snapshot.graph.remove_file_surface(rel);
+            }
             snapshot.chunks.retain(|chunk| chunk.path != *rel);
-            if abs.exists() {
+            if current_files.contains_key(rel) && abs.exists() {
                 snapshot
                     .chunks
                     .extend(crate::chunk::chunk_file(&root, &abs, &snapshot.symbols)?);
@@ -783,7 +789,9 @@ fn write_incremental_snapshot(
 
     for rel in touched {
         let abs = root.join(rel);
-        if abs.is_file() {
+        let is_current =
+            source_paths.contains(rel) || config_paths.contains(rel) || entry_paths.contains(rel);
+        if is_current && abs.is_file() {
             insert_file_row(&tx, &root, rel, &source_paths, &config_paths, &entry_paths)?;
         }
     }
@@ -1562,6 +1570,63 @@ mod tests {
             .unwrap();
         assert!(snapshot.symbols.find("old_symbol").is_empty());
         assert!(!snapshot.symbols.find("new_symbol").is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refresh_incremental_removes_now_ignored_extra_file() {
+        let root = temp_project("persistent_index_incremental_removes_extra");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("ignored")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='tmp'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        fs::write(root.join("src").join("lib.rs"), "pub fn kept() {}\n").unwrap();
+        fs::write(
+            root.join("ignored").join("old.rs"),
+            "pub fn removed_from_index() {}\n",
+        )
+        .unwrap();
+
+        let layer = CognitiveProjectLayer::initialize(&root).unwrap();
+        PersistentIndex::build_default(
+            &layer.root,
+            &layer.scan,
+            &layer.symbols,
+            &layer.references,
+            &layer.graph,
+            &layer.vector_store.chunks,
+        )
+        .unwrap();
+
+        fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
+        let changed_scan = crate::scanner::ProjectScanner::default()
+            .scan(&root)
+            .unwrap();
+        let stale = PersistentIndex::freshness_default(&root, &changed_scan).unwrap();
+        assert!(
+            stale
+                .extra_files
+                .iter()
+                .any(|path| path == Path::new("ignored/old.rs")),
+            "{}",
+            stale.render_human()
+        );
+
+        let result = PersistentIndex::refresh_incremental_default(&root, &changed_scan, 128)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result.mode, PersistentIndexRefreshMode::Incremental);
+        assert!(result.freshness_after.fresh, "{}", result.render_human());
+        let snapshot = PersistentIndex::load_snapshot_default(&root, &changed_scan)
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.symbols.find("removed_from_index").is_empty());
+        assert!(!snapshot.symbols.find("kept").is_empty());
 
         let _ = fs::remove_dir_all(root);
     }

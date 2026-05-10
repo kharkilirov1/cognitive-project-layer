@@ -6,8 +6,10 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
-use crate::CognitiveProjectLayer;
 use crate::scanner::{IgnoreMatcher, is_text_candidate};
+use crate::{
+    CognitiveProjectLayer, DEFAULT_INDEX_REFRESH_LIMIT, refresh_or_rebuild_persistent_index,
+};
 
 pub fn watch_project(root: impl AsRef<Path>, debounce: Duration) -> Result<()> {
     let root = root.as_ref().canonicalize()?;
@@ -21,6 +23,14 @@ pub fn watch_project(root: impl AsRef<Path>, debounce: Duration) -> Result<()> {
     println!("Root: {}", root.display());
     println!("Debounce: {} ms", debounce.as_millis());
     println!("Press Ctrl+C to stop.");
+
+    match refresh_or_rebuild_persistent_index(&root, 32_000, DEFAULT_INDEX_REFRESH_LIMIT) {
+        Ok(result) => println!(
+            "self-heal index: mode={:?}; touched={}",
+            result.mode, result.touched_files
+        ),
+        Err(error) => eprintln!("self-heal index skipped: {error}"),
+    }
 
     let mut layer = CognitiveProjectLayer::initialize(&root)?;
     let ignore_matcher = IgnoreMatcher::from_root(&root);
@@ -73,6 +83,17 @@ pub fn watch_project(root: impl AsRef<Path>, debounce: Duration) -> Result<()> {
                         layer.graph.edges.len(),
                         layer.vector_store.len()
                     );
+                    match refresh_or_rebuild_persistent_index(
+                        &root,
+                        layer.budget.max_tokens,
+                        DEFAULT_INDEX_REFRESH_LIMIT,
+                    ) {
+                        Ok(result) => println!(
+                            "persisted index: mode={:?}; touched={}",
+                            result.mode, result.touched_files
+                        ),
+                        Err(error) => eprintln!("persisted index refresh failed: {error}"),
+                    }
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,

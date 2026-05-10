@@ -10,3 +10,7 @@ opencode.json
 __pycache__/
 *.pyc
 .playwright-mcp/
+node_modules/
+**/node_modules/
+/ui/
+/ui/**/dist/

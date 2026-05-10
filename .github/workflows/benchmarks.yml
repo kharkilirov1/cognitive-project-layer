@@ -15,6 +15,8 @@ on:
       - "scripts/bench_cli.py"
       - "scripts/bench_large_repo.py"
       - "scripts/check_bench_thresholds.py"
+      - "scripts/eval_public_codesearchnet.py"
+      - "scripts/eval_file_localization.py"
       - "evals/**"
 
 jobs:
@@ -35,12 +37,34 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --bins
 
+      - name: Install Python benchmark dependencies
+        run: python -m pip install pandas pyarrow
+
       - name: Run retrieval eval
         run: >
           python scripts/eval_retrieval.py
           --cpl ./target/release/cpl
           --top-k 3
           --json-out .cpl/eval-results/retrieval.json
+
+      - name: Run file localization eval
+        run: >
+          python scripts/eval_file_localization.py
+          --cpl ./target/release/cpl
+          --top-k 5
+          --json-out .cpl/eval-results/file-localization.json
+
+      - name: Run public CodeSearchNet smoke eval
+        run: >
+          python scripts/eval_public_codesearchnet.py
+          --cpl ./target/release/cpl
+          --language python
+          --limit 20
+          --mode http
+          --port 3891
+          --min-recall10 0.90
+          --min-ndcg10 0.70
+          --json-out .cpl/eval-results/public-codesearchnet-smoke.json
 
       - name: Run CLI benchmark
         run: >

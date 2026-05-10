@@ -144,7 +144,7 @@ pub fn run(root: impl AsRef<Path>) -> Result<DoctorReport> {
         }),
     }
 
-    checks.push(ollama_check());
+    checks.push(ollama_check(&root));
     checks.push(codex_mcp_config_check());
 
     Ok(DoctorReport {
@@ -206,8 +206,8 @@ fn cpl_mcp_check(current_exe: Option<&Path>) -> DoctorCheck {
     }
 }
 
-fn ollama_check() -> DoctorCheck {
-    let config = EmbeddingConfig::from_env_or_local();
+fn ollama_check(root: &Path) -> DoctorCheck {
+    let config = EmbeddingConfig::from_project_or_env(root);
     let model = if config.model == "local-hash-embedding" {
         "nomic-embed-text".to_string()
     } else {
@@ -232,7 +232,11 @@ fn ollama_check() -> DoctorCheck {
             return DoctorCheck {
                 name: "Ollama".to_string(),
                 status: DoctorStatus::Warning,
-                message: format!("not reachable at localhost:11434 ({error})"),
+                message: format!(
+                    "Ollama not running or not reachable at localhost:11434 ({error}). \
+Run `ollama serve`, then `ollama pull {model}`; or use the offline fallback \
+`--backend local-hash` / `CPL_EMBEDDING_BACKEND=local-hash`."
+                ),
             };
         }
     };
@@ -240,7 +244,10 @@ fn ollama_check() -> DoctorCheck {
         return DoctorCheck {
             name: "Ollama".to_string(),
             status: DoctorStatus::Warning,
-            message: format!("/api/tags returned {}", response.status()),
+            message: format!(
+                "/api/tags returned {}. Check `ollama serve`; run `ollama pull {model}` if the model is missing; fallback: `--backend local-hash`.",
+                response.status()
+            ),
         };
     }
     let value = response.json::<Value>().unwrap_or(Value::Null);
@@ -266,7 +273,9 @@ fn ollama_check() -> DoctorCheck {
         DoctorCheck {
             name: "Ollama".to_string(),
             status: DoctorStatus::Warning,
-            message: format!("reachable; model `{model}` not found; run `ollama pull {model}`"),
+            message: format!(
+                "reachable; model `{model}` not found. Run `ollama pull {model}`; fallback: `--backend local-hash`."
+            ),
         }
     }
 }

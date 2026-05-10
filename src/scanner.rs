@@ -8,6 +8,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::config::ProjectConfig;
+
 pub const IGNORED_DIRS: &[&str] = &[
     "node_modules",
     "target",
@@ -244,6 +246,12 @@ impl IgnoreMatcher {
         for file_name in [".gitignore", ".cplignore"] {
             patterns.extend(load_ignore_patterns(&root.join(file_name)));
         }
+        patterns.extend(
+            ProjectConfig::load(root)
+                .ignore_paths
+                .iter()
+                .filter_map(|path| parse_ignore_pattern(path)),
+        );
         Self {
             ignored_names,
             patterns,

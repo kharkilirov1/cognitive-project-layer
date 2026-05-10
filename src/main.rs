@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cognitive_project_layer::budget::ContextBudgetManager;
+use cognitive_project_layer::config::ProjectConfig;
 use cognitive_project_layer::doctor;
 use cognitive_project_layer::embedding::{EmbeddingClient, EmbeddingConfig};
 use cognitive_project_layer::persistent_index::PersistentIndex;
@@ -13,6 +14,7 @@ use cognitive_project_layer::persistent_vector::{
 };
 use cognitive_project_layer::qdrant::{QdrantConfig, QdrantVectorClient};
 use cognitive_project_layer::scanner::ProjectScanner;
+use cognitive_project_layer::self_heal::{SelfHealEmbeddingMode, SelfHealOptions, self_heal};
 use cognitive_project_layer::tools::FallbackTools;
 use cognitive_project_layer::{
     CognitiveProjectLayer, DEFAULT_INDEX_REFRESH_LIMIT, refresh_or_rebuild_persistent_index,
@@ -120,6 +122,29 @@ enum Command {
     Doctor {
         #[arg(long)]
         json: bool,
+        /// Also run safe local self-heal before printing diagnostics.
+        #[arg(long)]
+        fix: bool,
+    },
+    /// Self-heal local CPL state: refresh/rebuild indexes and optionally embeddings.
+    Heal {
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = DEFAULT_INDEX_REFRESH_LIMIT)]
+        max_incremental_files: usize,
+        #[arg(long, default_value_t = DEFAULT_INDEX_REFRESH_LIMIT)]
+        max_incremental_paths: usize,
+        /// Embedding maintenance mode: off, existing, or ensure.
+        #[arg(long, default_value = "existing")]
+        embeddings: String,
+        #[arg(long)]
+        embedding_backend: Option<String>,
+        #[arg(long)]
+        embedding_model: Option<String>,
+        #[arg(long)]
+        embedding_endpoint: Option<String>,
+        #[arg(long)]
+        embedding_dimensions: Option<usize>,
     },
     /// Show structural graph summary or JSON graph.
     Graph {
@@ -430,8 +455,57 @@ fn main() -> Result<()> {
                 println!("{}", result.render_human());
             }
         }
-        Command::Doctor { json } => {
+        Command::Doctor { json, fix } => {
+            if fix {
+                let report = self_heal(&cli.root, SelfHealOptions::default())?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("{}", report.render_human());
+                }
+                return Ok(());
+            }
             let report = doctor::run(&cli.root)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", report.render_human());
+            }
+        }
+        Command::Heal {
+            json,
+            max_incremental_files,
+            max_incremental_paths,
+            embeddings,
+            embedding_backend,
+            embedding_model,
+            embedding_endpoint,
+            embedding_dimensions,
+        } => {
+            let embedding_config = if let Some(backend) = embedding_backend {
+                let dimensions =
+                    embedding_dimensions.unwrap_or_else(|| default_embedding_dimensions(&backend));
+                Some(embedding_config_from_cli(
+                    &backend,
+                    embedding_model,
+                    embedding_endpoint,
+                    dimensions,
+                )?)
+            } else {
+                None
+            };
+            let allow_external_embeddings = embedding_config.is_some();
+            let report = self_heal(
+                &cli.root,
+                SelfHealOptions {
+                    max_incremental_files,
+                    max_incremental_paths,
+                    embeddings: SelfHealEmbeddingMode::parse(&embeddings)?,
+                    embedding_config,
+                    allow_external_embeddings,
+                    ..SelfHealOptions::default()
+                },
+            )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -576,7 +650,7 @@ fn main() -> Result<()> {
             let db = if let Some(db) = layer.persistent_vector_db.as_ref() {
                 db.clone().into_eager()?
             } else {
-                let config = EmbeddingConfig::from_env_or_local();
+                let config = EmbeddingConfig::from_project_or_env(&layer.root);
                 let client = EmbeddingClient::new(config);
                 PersistentVectorDb::build(&layer.root, &layer.vector_store.chunks, &client)?
             };
@@ -604,7 +678,7 @@ fn main() -> Result<()> {
             let root = cli.root.canonicalize()?;
             let embedding_config = PersistentVectorDb::load_default(&root)?
                 .map(|db| db.config())
-                .unwrap_or_else(EmbeddingConfig::from_env_or_local);
+                .unwrap_or_else(|| EmbeddingConfig::from_project_or_env(&root));
             let embeddings = EmbeddingClient::new(embedding_config);
             let hits = client.search(&query, limit, &embeddings)?;
             if json {
@@ -634,10 +708,18 @@ fn main() -> Result<()> {
             port,
             max_tokens,
         } => {
+            let configured_max_tokens = if max_tokens == ContextBudgetManager::default().max_tokens
+            {
+                ProjectConfig::load(&cli.root)
+                    .context_max_tokens
+                    .unwrap_or(max_tokens)
+            } else {
+                max_tokens
+            };
             cognitive_project_layer::http_server::serve_project_with_budget(
                 &cli.root,
                 &format!("{host}:{port}"),
-                max_tokens,
+                configured_max_tokens,
             )?;
         }
         Command::Panel { query } => {
@@ -787,6 +869,13 @@ fn embedding_config_from_cli(
             "unknown embedding backend `{}`; use local-hash, ollama, openai, or openai-compatible",
             other
         ),
+    }
+}
+
+fn default_embedding_dimensions(backend: &str) -> usize {
+    match backend.to_ascii_lowercase().as_str() {
+        "ollama" | "openai-compatible" | "local" | "local-model" => 768,
+        _ => 1536,
     }
 }
 
@@ -1113,6 +1202,42 @@ mod tests {
                 assert_eq!(max_incremental_paths, 9);
             }
             _ => panic!("expected embed-refresh command"),
+        }
+    }
+
+    #[test]
+    fn heal_command_accepts_self_heal_options() {
+        let cli = Cli::parse_from([
+            "cpl",
+            "heal",
+            "--embeddings",
+            "ensure",
+            "--max-incremental-files",
+            "11",
+            "--max-incremental-paths",
+            "13",
+            "--embedding-backend",
+            "local-hash",
+            "--embedding-dimensions",
+            "128",
+        ]);
+
+        match cli.command {
+            Command::Heal {
+                embeddings,
+                max_incremental_files,
+                max_incremental_paths,
+                embedding_backend,
+                embedding_dimensions,
+                ..
+            } => {
+                assert_eq!(embeddings, "ensure");
+                assert_eq!(max_incremental_files, 11);
+                assert_eq!(max_incremental_paths, 13);
+                assert_eq!(embedding_backend.as_deref(), Some("local-hash"));
+                assert_eq!(embedding_dimensions, Some(128));
+            }
+            _ => panic!("expected heal command"),
         }
     }
 

@@ -32,7 +32,7 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - Persistent structural SQLite index in `.cpl/index.sqlite`.
 - Warm-start from fresh SQLite structural indexes.
 - Incremental SQLite index refresh with rebuild fallback.
-- Index freshness diagnostics, MCP auto-refresh, and `cpl doctor`.
+- Index freshness diagnostics, MCP/HTTP/watch auto-refresh, `cpl doctor`, and safe `cpl heal`.
 - Persistent embedding DB in `.cpl/vectors.sqlite` with legacy `.cpl/vector_db.json` fallback.
 - Lazy SQLite vector loading with DB-backed streaming `embed-search`.
 - Incremental embedding refresh by changed chunk path.
@@ -48,6 +48,7 @@ scan -> skeleton -> symbols/references -> grep -> vector search -> graph expansi
 - CLI `cpl`, MCP stdio server `cpl-mcp`, Python MCP wrapper, and local HTTP API.
 - Built-in local dashboard UI for health, retrieval, refresh actions, and eval history.
 - File watcher and background refresh worker.
+- Self-healing local maintenance for stale SQLite indexes and embedding DBs.
 - Fixture-based retrieval evals and CLI latency benchmarks.
 - Optional ArkTS/HarmonyOS profile; see [`docs/PROFILES.md`](docs/PROFILES.md).
 
@@ -135,6 +136,7 @@ cargo run -- index-build --root .
 cargo run -- index-refresh --root .
 cargo run -- index-db --root .
 cargo run -- doctor --root .
+cargo run -- heal --root .
 ```
 
 After `cargo install --git`, use the installed binary:
@@ -142,8 +144,22 @@ After `cargo install --git`, use the installed binary:
 ```powershell
 cpl scan --root .
 cpl retrieve --root . "Where is retrieve implemented?"
+cpl heal --root .
 cpl init --root . --server native
 ```
+
+Self-heal local project state:
+
+```powershell
+cpl heal --root .
+cpl doctor --root . --fix
+cpl heal --root . --embeddings ensure --embedding-backend local-hash --embedding-dimensions 1536
+```
+
+`heal` is intentionally local and safe: it refreshes/rebuilds `.cpl/index.sqlite`,
+refreshes an existing `.cpl/vectors.sqlite` by default, and only creates missing
+embeddings when `--embeddings ensure` is requested. Embedding refresh skips
+potentially external backends unless you explicitly pass an embedding backend.
 
 Build local embeddings:
 
@@ -218,6 +234,7 @@ GET  http://127.0.0.1:3878/health
 GET  http://127.0.0.1:3878/ui
 GET  http://127.0.0.1:3878/scan
 GET  http://127.0.0.1:3878/skeleton
+GET  http://127.0.0.1:3878/graph
 GET  http://127.0.0.1:3878/retrieve?query=symbol_lookup
 GET  http://127.0.0.1:3878/context?query=auth%20login&max_tokens=64000
 GET  http://127.0.0.1:3878/symbols?query=retrieve
@@ -225,6 +242,7 @@ GET  http://127.0.0.1:3878/references?symbol=retrieve
 GET  http://127.0.0.1:3878/embed-search?query=opencode%20mcp&limit=5
 POST http://127.0.0.1:3878/embeddings/rebuild
 POST http://127.0.0.1:3878/embeddings/refresh
+POST http://127.0.0.1:3878/heal
 POST http://127.0.0.1:3878/index/rebuild
 POST http://127.0.0.1:3878/index/refresh
 GET  http://127.0.0.1:3878/index-db
@@ -239,7 +257,42 @@ GET  http://127.0.0.1:3878/grep?pattern=EntryAbility
 Security note: keep the HTTP API bound to `127.0.0.1` unless you intentionally
 want another process or machine to access your project context.
 
-Dashboard details: [`docs/UI.md`](docs/UI.md).
+Dashboard details: [`docs/UI.md`](docs/UI.md). The dashboard includes an
+interactive graph explorer with search, node/edge highlighting, minimap,
+force-layout pass, local maintenance actions, retrieval panels, and benchmark
+history from `.cpl/eval-results/*.json`.
+
+Optional project config lives at `.cpl/config.toml`; see
+[`docs/CONFIG.md`](docs/CONFIG.md) and [`examples/cpl.config.toml`](examples/cpl.config.toml).
+
+## Public retrieval benchmark
+
+CPL can run a public CodeSearchNet retrieval eval using
+`mteb/CodeSearchNetRetrieval`:
+
+```powershell
+cargo build --release --bins
+python scripts/eval_public_codesearchnet.py `
+  --cpl .\target\release\cpl.exe `
+  --language python `
+  --limit 100 `
+  --mode http `
+  --min-recall10 0.90 `
+  --min-ndcg10 0.70 `
+  --json-out .cpl\eval-results\public-codesearchnet-python.json
+```
+
+Recent local release run on the first 100 Python queries:
+
+- `Recall@1`: `0.53`
+- `Recall@3`: `0.71`
+- `Recall@5`: `0.79`
+- `Recall@10`: `0.90`
+- `MRR`: `0.645`
+- `NDCG@10`: `0.705`
+
+Local latency still depends on hardware; these quality metrics are the portable
+part of the benchmark.
 
 ## CLI overview
 
@@ -256,6 +309,8 @@ cpl index-freshness
 cpl index-search <query...>
 cpl index-refresh [--max-incremental-files N]
 cpl doctor
+cpl doctor --fix
+cpl heal [--embeddings off|existing|ensure]
 cpl graph
 cpl chunks [query]
 cpl embed-index

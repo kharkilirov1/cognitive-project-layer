@@ -207,6 +207,21 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="cpl_heal",
+            description="Self-heal local CPL state: refresh/rebuild indexes and optionally embeddings.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "embeddings": {"type": "string", "enum": ["off", "existing", "ensure"]},
+                    "backend": {"type": "string", "enum": ["ollama", "local-hash", "openai-compatible", "openai"]},
+                    "model": {"type": "string"},
+                    "dimensions": {"type": "integer", "minimum": 8},
+                    "max_incremental_files": {"type": "integer", "minimum": 0},
+                    "max_incremental_paths": {"type": "integer", "minimum": 0},
+                },
+            },
+        ),
+        Tool(
             name="cpl_doctor",
             description="Diagnose CPL binaries, MCP config, SQLite index, vector DB, and Ollama.",
             inputSchema={"type": "object", "properties": {}},
@@ -307,6 +322,23 @@ async def call_tool(name: str, arguments: dict[str, Any] | None):
             command = ["index-refresh"]
             if args.get("max_incremental_files") is not None:
                 command.extend(["--max-incremental-files", str(args["max_incremental_files"])])
+            return text(run_cpl(command, timeout=600))
+        if name == "cpl_heal":
+            command = [
+                "heal",
+                "--embeddings",
+                str(args.get("embeddings", "existing")),
+                "--max-incremental-files",
+                str(args.get("max_incremental_files", 128)),
+                "--max-incremental-paths",
+                str(args.get("max_incremental_paths", 128)),
+            ]
+            if args.get("backend"):
+                command.extend(["--embedding-backend", str(args["backend"])])
+            if args.get("model"):
+                command.extend(["--embedding-model", str(args["model"])])
+            if args.get("dimensions"):
+                command.extend(["--embedding-dimensions", str(args["dimensions"])])
             return text(run_cpl(command, timeout=600))
         if name == "cpl_doctor":
             return text(run_cpl(["doctor"], timeout=180))

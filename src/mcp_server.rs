@@ -10,6 +10,7 @@ use crate::doctor;
 use crate::embedding::{EmbeddingClient, EmbeddingConfig};
 use crate::persistent_index::{PersistentIndex, PersistentIndexRefreshMode};
 use crate::persistent_vector::{build_and_save_default, refresh_and_save_default};
+use crate::self_heal::{SelfHealEmbeddingMode, SelfHealOptions, self_heal};
 use crate::tools::FallbackTools;
 use crate::{
     CognitiveProjectLayer, DEFAULT_INDEX_REFRESH_LIMIT, refresh_or_rebuild_persistent_index,
@@ -339,6 +340,37 @@ impl McpServer {
                 self.layer = None;
                 Ok(result.render_human())
             }
+            "cpl_heal" => {
+                let embeddings = optional_string(&args, "embeddings")
+                    .map(|value| SelfHealEmbeddingMode::parse(&value))
+                    .transpose()?
+                    .unwrap_or(SelfHealEmbeddingMode::Existing);
+                let max_incremental_files = optional_usize(&args, "max_incremental_files")
+                    .unwrap_or_else(index_refresh_limit_from_env);
+                let max_incremental_paths =
+                    optional_usize(&args, "max_incremental_paths").unwrap_or(128);
+                let embedding_config = optional_string(&args, "backend")
+                    .map(|backend| {
+                        let dimensions = optional_usize(&args, "dimensions")
+                            .unwrap_or_else(|| default_embedding_dimensions(&backend));
+                        embedding_config(&backend, optional_string(&args, "model"), dimensions)
+                    })
+                    .transpose()?;
+                let allow_external_embeddings = embedding_config.is_some();
+                let report = self_heal(
+                    &self.root,
+                    SelfHealOptions {
+                        max_tokens: self.max_tokens,
+                        max_incremental_files,
+                        embeddings,
+                        embedding_config,
+                        allow_external_embeddings,
+                        max_incremental_paths,
+                    },
+                )?;
+                self.layer = None;
+                Ok(report.render_human())
+            }
             "cpl_doctor" => Ok(doctor::run(&self.root)?.render_human()),
             "cpl_tree" => {
                 let depth = args
@@ -514,6 +546,18 @@ fn tool_definitions() -> Vec<Value> {
             "Refresh the persistent SQLite index incrementally, rebuilding only when needed.",
             json!({
                 "max_incremental_files": {"type": "integer", "minimum": 0}
+            }),
+        ),
+        tool(
+            "cpl_heal",
+            "Self-heal local CPL state: refresh/rebuild SQLite index and optionally embeddings.",
+            json!({
+                "embeddings": {"type": "string", "enum": ["off", "existing", "ensure"]},
+                "backend": {"type": "string", "enum": ["ollama", "local-hash", "openai-compatible", "openai"]},
+                "model": {"type": "string"},
+                "dimensions": {"type": "integer", "minimum": 8},
+                "max_incremental_files": {"type": "integer", "minimum": 0},
+                "max_incremental_paths": {"type": "integer", "minimum": 0}
             }),
         ),
         tool(
@@ -708,6 +752,13 @@ fn embedding_config(
     }
 }
 
+fn default_embedding_dimensions(backend: &str) -> usize {
+    match backend.to_ascii_lowercase().as_str() {
+        "ollama" | "openai-compatible" | "local" | "local-model" => 768,
+        _ => 1536,
+    }
+}
+
 fn trace(message: &str) {
     let Ok(path) = std::env::var("CPL_MCP_TRACE") else {
         return;
@@ -745,6 +796,7 @@ mod tests {
                 .iter()
                 .any(|tool| tool["name"] == "cpl_refresh_embeddings")
         );
+        assert!(tools.iter().any(|tool| tool["name"] == "cpl_heal"));
         assert!(tools.iter().all(|tool| tool.get("inputSchema").is_some()));
         let context = tools
             .iter()
@@ -754,6 +806,56 @@ mod tests {
             context["inputSchema"]["properties"]
                 .get("max_tokens")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn mcp_tool_definitions_match_golden_surface() {
+        let tools = tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "cpl_scan",
+                "cpl_skeleton",
+                "cpl_panel",
+                "cpl_retrieve",
+                "cpl_context",
+                "cpl_symbols",
+                "cpl_references",
+                "cpl_embed_search",
+                "cpl_build_embeddings",
+                "cpl_refresh_embeddings",
+                "cpl_index_build",
+                "cpl_index_db",
+                "cpl_index_freshness",
+                "cpl_index_search",
+                "cpl_index_refresh",
+                "cpl_heal",
+                "cpl_doctor",
+                "cpl_tree",
+                "cpl_grep",
+            ]
+        );
+        let retrieve = tools
+            .iter()
+            .find(|tool| tool["name"] == "cpl_retrieve")
+            .unwrap();
+        assert_eq!(retrieve["inputSchema"]["required"], json!(["query"]));
+        assert_eq!(
+            retrieve["inputSchema"]["properties"]["query"]["type"],
+            "string"
+        );
+        let refresh = tools
+            .iter()
+            .find(|tool| tool["name"] == "cpl_index_refresh")
+            .unwrap();
+        assert_eq!(
+            refresh["inputSchema"]["properties"]["max_incremental_files"]["type"],
+            "integer"
         );
     }
 }

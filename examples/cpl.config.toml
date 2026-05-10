@@ -1,0 +1,18 @@
+[ignore]
+paths = ["generated/", "vendor/", "*.snap"]
+
+[embedding]
+backend = "ollama"
+model = "nomic-embed-text"
+endpoint = "http://localhost:11434/v1/embeddings"
+dimensions = 768
+
+[context]
+max_tokens = 64000
+
+[benchmarks]
+recall10 = "0.90"
+ndcg10 = "0.70"
+
+[ui]
+default_tab = "graph"

@@ -31,6 +31,57 @@ python scripts/eval_retrieval.py --json-out .cpl\eval-results\retrieval.json
 When `cpl serve` is running, saved `.cpl/eval-results/*.json` files are also
 summarized by `GET /benchmarks` and shown in the local dashboard at `/ui`.
 
+## Public CodeSearchNet retrieval eval
+
+The public retrieval runner uses
+[`mteb/CodeSearchNetRetrieval`](https://huggingface.co/datasets/mteb/CodeSearchNetRetrieval).
+It downloads the parquet files, materializes a temporary code corpus, runs CPL
+retrieval, and reports standard retrieval metrics: `Recall@1/3/5/10`, `MRR`,
+and `NDCG@10`.
+
+```powershell
+cargo build --release --bins
+python scripts/eval_public_codesearchnet.py `
+  --cpl .\target\release\cpl.exe `
+  --language python `
+  --limit 100 `
+  --mode http `
+  --min-recall10 0.90 `
+  --min-ndcg10 0.70 `
+  --json-out .cpl\eval-results\public-codesearchnet-python.json
+```
+
+Modes:
+
+- `--mode cli` starts a fresh `cpl retrieve` process per query.
+- `--mode http` starts one warm local `cpl serve` process and calls
+  `/retrieve`, which is better for larger public subsets.
+
+Recent local release run on the first 100 Python queries:
+
+- `Recall@1`: `0.53`
+- `Recall@3`: `0.71`
+- `Recall@5`: `0.79`
+- `Recall@10`: `0.90`
+- `MRR`: `0.645`
+- `NDCG@10`: `0.705`
+
+The quality gate shown above checks the hardware-independent retrieval quality.
+Wall-clock timings still depend on the local machine.
+
+## File localization eval
+
+The file localization runner treats each fixture retrieval case as a
+file-localization task and checks whether expected files appear in top-k
+retrieval results.
+
+```powershell
+python scripts/eval_file_localization.py `
+  --cpl .\target\release\cpl.exe `
+  --top-k 5 `
+  --json-out .cpl\eval-results\file-localization.json
+```
+
 ## CLI benchmark
 
 The benchmark runner measures wall-clock latency for `scan`, `skeleton`, and
